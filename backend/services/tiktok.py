@@ -27,16 +27,32 @@ def normalize_cookies(cookies: list) -> list:
     result = []
     for c in cookies:
         cookie = dict(c)
+
+        # sameSite normalization
         raw = (cookie.get("sameSite") or "").lower()
         cookie["sameSite"] = SAMESITE_MAP.get(raw, "None")
+
+        # expirationDate (Cookie-Editor) → expires (Playwright)
+        exp = cookie.pop("expirationDate", None)
+        if exp:
+            cookie["expires"] = int(exp)
+
+        # normalize .www.tiktok.com → .tiktok.com
+        domain = cookie.get("domain", "")
+        if domain == ".www.tiktok.com":
+            cookie["domain"] = ".tiktok.com"
+        elif domain == "www.tiktok.com":
+            cookie["domain"] = ".tiktok.com"
+
+        # strip fields Playwright doesn't accept
         for key in ["hostOnly", "session", "storeId", "id"]:
             cookie.pop(key, None)
+
         if not cookie.get("path"):
             cookie["path"] = "/"
         if not cookie.get("domain"):
             cookie["url"] = "https://www.tiktok.com"
-        if not cookie.get("expirationDate"):
-            cookie.pop("expirationDate", None)
+
         result.append(cookie)
     return result
 
