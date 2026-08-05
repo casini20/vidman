@@ -3,7 +3,7 @@ import json
 import os
 import logging
 import re
-from playwright.async_api import async_playwright
+import httpx
 
 logger = logging.getLogger(__name__)
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
@@ -32,6 +32,9 @@ def normalize_cookies(cookies: list) -> list:
         result.append(cookie)
     return result
 
+def cookies_to_header(cookies: list) -> str:
+    return "; ".join(f"{c['name']}={c['value']}" for c in cookies if c.get("name") and c.get("value"))
+
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -40,117 +43,47 @@ USER_AGENT = (
 
 
 async def get_account_info(cookies: list) -> dict:
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=HEADLESS)
-        context = await browser.new_context(user_agent=USER_AGENT)
+    cookie_header = cookies_to_header(cookies)
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Cookie": cookie_header,
+        "Referer": "https://www.tiktok.com/",
+    }
+
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        resp = await client.get(
+            "https://www.tiktok.com/passport/web/account/info/",
+            headers=headers,
+            timeout=30,
+        )
+        logger.error(f"Passport API status: {resp.status_code}")
+        logger.error(f"Passport API response: {resp.text[:500]}")
 
         try:
-            await context.add_cookies(normalize_cookies(cookies))
-            page = await context.new_page()
+            data = resp.json()
+            user_data = data.get("data", {})
+            username = user_data.get("username") or user_data.get("unique_id")
+            display_name = user_data.get("nickname", username)
+            avatar_url = user_data.get("avatar_url", "")
 
-            await page.goto(
-                "https://www.tiktok.com/profile",
-                wait_until="domcontentloaded",
-                timeout=60000,
-            )
-            await page.wait_for_timeout(5000)
+            if username:
+                return {
+                    "username": username,
+                    "display_name": display_name or username,
+                    "avatar_url": avatar_url,
+                    "followers": "0",
+                    "following": "0",
+                    "likes": "0",
+                }
+        except Exception as e:
+            logger.error(f"Failed to parse passport API: {e}")
 
-            username = None
-
-            current_url = page.url
-            logger.error(f"Profile redirect URL: {current_url}")
-            if "/@" in current_url:
-                username = current_url.split("/@")[1].strip("/").split("?")[0]
-                logger.error(f"Got username from redirect: {username}")
-
-            if not username:
-                await page.goto(
-                    "https://www.tiktok.com/",
-                    wait_until="domcontentloaded",
-                    timeout=60000,
-                )
-                await page.wait_for_timeout(8000)
-
-                try:
-                    link = await page.query_selector('[data-e2e="nav-profile"]')
-                    if link:
-                        href = await link.get_attribute("href") or ""
-                        if "/@" in href:
-                            username = href.split("/@")[1].strip("/").split("?")[0]
-                except Exception:
-                    pass
-
-            if not username:
-                try:
-                    content = await page.content()
-                    match = re.search(r'"webapp\.user-detail".*?"uniqueId":"([^"]+)"', content)
-                    if match:
-                        username = match.group(1)
-                except Exception:
-                    pass
-
-            if not username:
-                raise Exception(
-                    "Could not detect logged-in user — are these valid TikTok cookies?"
-                )
-
-            await page.goto(
-                f"https://www.tiktok.com/@{username}",
-                wait_until="domcontentloaded",
-                timeout=60000,
-            )
-            await page.wait_for_timeout(8000)
-
-            followers = following = likes = "0"
-            display_name = username
-            avatar_url = ""
-
-            for attr, selector in [
-                ("followers", '[data-e2e="followers-count"]'),
-                ("following", '[data-e2e="following-count"]'),
-                ("likes", '[data-e2e="likes-count"]'),
-            ]:
-                try:
-                    el = await page.query_selector(selector)
-                    if el:
-                        val = await el.inner_text()
-                        if attr == "followers":
-                            followers = val
-                        elif attr == "following":
-                            following = val
-                        else:
-                            likes = val
-                except Exception:
-                    pass
-
-            try:
-                el = await page.query_selector('[data-e2e="user-title"]')
-                if el:
-                    display_name = await el.inner_text()
-            except Exception:
-                pass
-
-            try:
-                el = await page.query_selector('[data-e2e="user-avatar"] img')
-                if el:
-                    avatar_url = await el.get_attribute("src") or ""
-            except Exception:
-                pass
-
-            return {
-                "username": username,
-                "display_name": display_name,
-                "avatar_url": avatar_url,
-                "followers": followers,
-                "following": following,
-                "likes": likes,
-            }
-
-        finally:
-            await browser.close()
+    raise Exception("Could not verify TikTok session — please re-export your cookies and try again")
 
 
 async def post_video(cookies: list, video_path: str, caption: str) -> dict:
+    from playwright.async_api import async_playwright
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=HEADLESS)
         context = await browser.new_context(user_agent=USER_AGENT)
@@ -180,7 +113,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             file_input = iframe_locator.locator('input[type="file"]')
             await file_input.wait_for(timeout=15000)
             await file_input.set_input_files(video_path)
-            logger.info("Video file set — waiting for processing...")
 
             await page.wait_for_timeout(10000)
 
@@ -190,7 +122,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 '[data-e2e="video-desc-input"]',
                 '.notranslate[contenteditable]',
             ]
-            caption_added = False
             for sel in caption_selectors:
                 try:
                     el = iframe_locator.locator(sel).first
@@ -198,7 +129,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                         await el.click()
                         await el.press("Control+a")
                         await el.type(caption, delay=30)
-                        caption_added = True
                         break
                 except Exception:
                     pass
