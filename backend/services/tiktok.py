@@ -5,6 +5,7 @@ import logging
 import re
 from playwright.async_api import async_playwright
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 
@@ -67,10 +68,10 @@ async def get_account_info(cookies: list) -> dict:
 
             # After redirect, URL should be /@username
             current_url = page.url
-            logger.info(f"Profile redirect URL: {current_url}")
+            logger.warning(f"Profile redirect URL: {current_url}")
             if "/@" in current_url:
                 username = current_url.split("/@")[1].strip("/").split("?")[0]
-                logger.info(f"Got username from redirect: {username}")
+                logger.warning(f"Got username from redirect: {username}")
 
             # Fallback: try the nav profile link
             if not username:
@@ -87,7 +88,7 @@ async def get_account_info(cookies: list) -> dict:
                         href = await link.get_attribute("href") or ""
                         if "/@" in href:
                             username = href.split("/@")[1].strip("/").split("?")[0]
-                            logger.info(f"Got username from nav: {username}")
+                            logger.warning(f"Got username from nav: {username}")
                 except Exception:
                     pass
 
@@ -98,7 +99,7 @@ async def get_account_info(cookies: list) -> dict:
                     match = re.search(r'"webapp\.user-detail".*?"uniqueId":"([^"]+)"', content)
                     if match:
                         username = match.group(1)
-                        logger.info(f"Got username from page source: {username}")
+                        logger.warning(f"Got username from page source: {username}")
                 except Exception:
                     pass
 
