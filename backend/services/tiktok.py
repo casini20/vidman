@@ -5,16 +5,8 @@ import logging
 import re
 from playwright.async_api import async_playwright
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
-
-CHROMIUM_ARGS = [
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage",
-    "--disable-gpu",
-]
 
 SAMESITE_MAP = {
     "no_restriction": "None",
@@ -27,32 +19,16 @@ def normalize_cookies(cookies: list) -> list:
     result = []
     for c in cookies:
         cookie = dict(c)
-
-        # sameSite normalization
         raw = (cookie.get("sameSite") or "").lower()
         cookie["sameSite"] = SAMESITE_MAP.get(raw, "None")
-
-        # expirationDate (Cookie-Editor) → expires (Playwright)
-        exp = cookie.pop("expirationDate", None)
-        if exp:
-            cookie["expires"] = int(exp)
-
-        # normalize .www.tiktok.com → .tiktok.com
-        domain = cookie.get("domain", "")
-        if domain == ".www.tiktok.com":
-            cookie["domain"] = ".tiktok.com"
-        elif domain == "www.tiktok.com":
-            cookie["domain"] = ".tiktok.com"
-
-        # strip fields Playwright doesn't accept
         for key in ["hostOnly", "session", "storeId", "id"]:
             cookie.pop(key, None)
-
         if not cookie.get("path"):
             cookie["path"] = "/"
         if not cookie.get("domain"):
             cookie["url"] = "https://www.tiktok.com"
-
+        if not cookie.get("expirationDate"):
+            cookie.pop("expirationDate", None)
         result.append(cookie)
     return result
 
@@ -65,14 +41,13 @@ USER_AGENT = (
 
 async def get_account_info(cookies: list) -> dict:
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=HEADLESS, args=CHROMIUM_ARGS)
+        browser = await p.chromium.launch(headless=HEADLESS)
         context = await browser.new_context(user_agent=USER_AGENT)
 
         try:
             await context.add_cookies(normalize_cookies(cookies))
             page = await context.new_page()
 
-            # Go directly to the profile redirect page
             await page.goto(
                 "https://www.tiktok.com/profile",
                 wait_until="domcontentloaded",
@@ -82,14 +57,12 @@ async def get_account_info(cookies: list) -> dict:
 
             username = None
 
-            # After redirect, URL should be /@username
             current_url = page.url
-            logger.warning(f"Profile redirect URL: {current_url}")
+            logger.error(f"Profile redirect URL: {current_url}")
             if "/@" in current_url:
                 username = current_url.split("/@")[1].strip("/").split("?")[0]
-                logger.warning(f"Got username from redirect: {username}")
+                logger.error(f"Got username from redirect: {username}")
 
-            # Fallback: try the nav profile link
             if not username:
                 await page.goto(
                     "https://www.tiktok.com/",
@@ -104,18 +77,15 @@ async def get_account_info(cookies: list) -> dict:
                         href = await link.get_attribute("href") or ""
                         if "/@" in href:
                             username = href.split("/@")[1].strip("/").split("?")[0]
-                            logger.warning(f"Got username from nav: {username}")
                 except Exception:
                     pass
 
-            # Fallback: look for logged-in user data in page source
             if not username:
                 try:
                     content = await page.content()
                     match = re.search(r'"webapp\.user-detail".*?"uniqueId":"([^"]+)"', content)
                     if match:
                         username = match.group(1)
-                        logger.warning(f"Got username from page source: {username}")
                 except Exception:
                     pass
 
@@ -182,7 +152,7 @@ async def get_account_info(cookies: list) -> dict:
 
 async def post_video(cookies: list, video_path: str, caption: str) -> dict:
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=HEADLESS, args=CHROMIUM_ARGS)
+        browser = await p.chromium.launch(headless=HEADLESS)
         context = await browser.new_context(user_agent=USER_AGENT)
 
         try:
@@ -220,6 +190,7 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 '[data-e2e="video-desc-input"]',
                 '.notranslate[contenteditable]',
             ]
+            caption_added = False
             for sel in caption_selectors:
                 try:
                     el = iframe_locator.locator(sel).first
@@ -227,6 +198,7 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                         await el.click()
                         await el.press("Control+a")
                         await el.type(caption, delay=30)
+                        caption_added = True
                         break
                 except Exception:
                     pass
