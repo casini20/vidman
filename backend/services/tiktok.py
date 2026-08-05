@@ -45,9 +45,9 @@ async def get_account_info(cookies: list) -> dict:
 
             # Land on TikTok home to detect logged-in username
             await page.goto(
-                "https://www.tiktok.com/", wait_until="domcontentloaded", timeout=30000
+                "https://www.tiktok.com/", wait_until="domcontentloaded", timeout=60000
             )
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(8000)
 
             username = None
 
@@ -84,9 +84,9 @@ async def get_account_info(cookies: list) -> dict:
             await page.goto(
                 f"https://www.tiktok.com/@{username}",
                 wait_until="domcontentloaded",
-                timeout=30000,
+                timeout=60000,
             )
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(8000)
 
             def safe_text(el):
                 return el
@@ -154,9 +154,9 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             await page.goto(
                 "https://www.tiktok.com/upload",
                 wait_until="domcontentloaded",
-                timeout=30000,
+                timeout=60000,
             )
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(8000)
 
             # Dismiss cookie consent if present
             for btn_text in ["Accept all", "Accept All", "Accept", "Decline optional"]:
