@@ -85,36 +85,57 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=HEADLESS)
-        context = await browser.new_context(user_agent=USER_AGENT)
+        browser = await p.chromium.launch(
+            headless=HEADLESS,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled",
+            ]
+        )
+        context = await browser.new_context(
+            user_agent=USER_AGENT,
+            viewport={"width": 1280, "height": 800},
+        )
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+        """)
 
         try:
             await context.add_cookies(normalize_cookies(cookies))
             page = await context.new_page()
 
             await page.goto(
-                "https://www.tiktok.com/upload",
+                "https://www.tiktok.com/creator-center/upload",
                 wait_until="domcontentloaded",
                 timeout=60000,
             )
-            await page.wait_for_timeout(8000)
-
-            for btn_text in ["Accept all", "Accept All", "Accept", "Decline optional"]:
-                try:
-                    btn = page.get_by_role("button", name=btn_text)
-                    if await btn.is_visible(timeout=2000):
-                        await btn.click()
-                        await page.wait_for_timeout(1000)
-                        break
-                except Exception:
-                    pass
-
-            iframe_locator = page.frame_locator("iframe").first
-            file_input = iframe_locator.locator('input[type="file"]')
-            await file_input.wait_for(timeout=15000)
-            await file_input.set_input_files(video_path)
-
             await page.wait_for_timeout(10000)
+            logger.info(f"Upload page URL: {page.url}")
+
+            # Try direct file input first
+            file_set = False
+            try:
+                file_input = page.locator('input[type="file"]').first
+                await file_input.wait_for(timeout=10000)
+                await file_input.set_input_files(video_path)
+                file_set = True
+                logger.info("File set via direct input")
+            except Exception:
+                pass
+
+            if not file_set:
+                try:
+                    iframe_locator = page.frame_locator("iframe").first
+                    file_input = iframe_locator.locator('input[type="file"]')
+                    await file_input.wait_for(timeout=30000)
+                    await file_input.set_input_files(video_path)
+                    file_set = True
+                    logger.info("File set via iframe input")
+                except Exception as e:
+                    raise Exception(f"Could not find file input: {e}")
+
+            await page.wait_for_timeout(15000)
 
             caption_selectors = [
                 '.public-DraftEditor-content',
@@ -123,15 +144,15 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 '.notranslate[contenteditable]',
             ]
             for sel in caption_selectors:
-                try:
-                    el = iframe_locator.locator(sel).first
-                    if await el.is_visible(timeout=4000):
-                        await el.click()
-                        await el.press("Control+a")
-                        await el.type(caption, delay=30)
-                        break
-                except Exception:
-                    pass
+                for locator in [page.locator(sel).first, page.frame_locator("iframe").first.locator(sel).first]:
+                    try:
+                        if await locator.is_visible(timeout=3000):
+                            await locator.click()
+                            await locator.press("Control+a")
+                            await locator.type(caption, delay=30)
+                            break
+                    except Exception:
+                        pass
 
             await page.wait_for_timeout(1000)
 
@@ -143,14 +164,16 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             ]
             posted = False
             for sel in post_selectors:
-                try:
-                    btn = iframe_locator.locator(sel).first
-                    if await btn.is_enabled(timeout=5000):
-                        await btn.click()
-                        posted = True
-                        break
-                except Exception:
-                    pass
+                for locator in [page.locator(sel).first, page.frame_locator("iframe").first.locator(sel).first]:
+                    try:
+                        if await locator.is_enabled(timeout=3000):
+                            await locator.click()
+                            posted = True
+                            break
+                    except Exception:
+                        pass
+                if posted:
+                    break
 
             if not posted:
                 raise Exception("Could not find or click the Post button")
