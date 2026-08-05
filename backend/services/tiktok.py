@@ -15,23 +15,17 @@ SAMESITE_MAP = {
 }
 
 def normalize_cookies(cookies: list) -> list:
-    """Normalize Cookie-Editor export format to Playwright-compatible format."""
     result = []
     for c in cookies:
         cookie = dict(c)
-        # Fix sameSite
         raw = (cookie.get("sameSite") or "").lower()
         cookie["sameSite"] = SAMESITE_MAP.get(raw, "None")
-        # Remove keys Playwright doesn't accept
         for key in ["hostOnly", "session", "storeId", "id"]:
             cookie.pop(key, None)
-        # Ensure path exists
         if not cookie.get("path"):
             cookie["path"] = "/"
-        # Ensure domain exists
         if not cookie.get("domain"):
             cookie["url"] = "https://www.tiktok.com"
-        # Remove expirationDate if it's None or 0
         if not cookie.get("expirationDate"):
             cookie.pop("expirationDate", None)
         result.append(cookie)
@@ -45,7 +39,6 @@ USER_AGENT = (
 
 
 async def get_account_info(cookies: list) -> dict:
-    """Scrape basic account info from TikTok using saved cookies."""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=HEADLESS)
         context = await browser.new_context(user_agent=USER_AGENT)
@@ -59,32 +52,57 @@ async def get_account_info(cookies: list) -> dict:
             )
             await page.wait_for_timeout(8000)
 
-            # Debug: log page title and URL
-            logger.error(f"Page URL: {page.url}")
-            logger.error(f"Page title: {await page.title()}")
             username = None
 
-            try:
-                link = await page.query_selector('[data-e2e="nav-profile"]')
-                if link:
-                    href = await link.get_attribute("href") or ""
-                    if "/@" in href:
-                        username = href.split("/@")[1].strip("/")
-            except Exception:
-                pass
+            # Try to get username from cookies directly
+            for cookie in cookies:
+                if cookie.get("name") == "sid_tt" and cookie.get("value"):
+                    pass  # we have session but need username
 
-            if not username:
+            # Try multiple selectors for the profile link
+            selectors = [
+                '[data-e2e="nav-profile"]',
+                'a[href*="/@"]',
+                '[data-e2e="profile-icon"]',
+                'a[href^="/@"]',
+            ]
+            
+            for selector in selectors:
                 try:
-                    anchors = await page.query_selector_all('a[href*="/@"]')
-                    for a in anchors:
-                        href = await a.get_attribute("href") or ""
-                        if "/@" in href:
-                            candidate = href.split("/@")[1].strip("/")
-                            if candidate and "/" not in candidate:
-                                username = candidate
-                                break
+                    if selector == 'a[href*="/@"]':
+                        anchors = await page.query_selector_all(selector)
+                        for a in anchors:
+                            href = await a.get_attribute("href") or ""
+                            if "/@" in href:
+                                candidate = href.split("/@")[1].strip("/").split("?")[0]
+                                if candidate and "/" not in candidate and len(candidate) > 0:
+                                    username = candidate
+                                    break
+                    else:
+                        link = await page.query_selector(selector)
+                        if link:
+                            href = await link.get_attribute("href") or ""
+                            if "/@" in href:
+                                username = href.split("/@")[1].strip("/").split("?")[0]
                 except Exception:
                     pass
+                if username:
+                    break
+
+            # Try getting username from page content
+            if not username:
+                try:
+                    content = await page.content()
+                    import re
+                    # Look for profile URL patterns
+                    matches = re.findall(r'"uniqueId":"([^"]+)"', content)
+                    if matches:
+                        username = matches[0]
+                        logger.error(f"Found username from page content: {username}")
+                except Exception:
+                    pass
+
+            logger.error(f"Detected username: {username}")
 
             if not username:
                 raise Exception(
@@ -148,7 +166,6 @@ async def get_account_info(cookies: list) -> dict:
 
 
 async def post_video(cookies: list, video_path: str, caption: str) -> dict:
-    """Post a video to TikTok using saved session cookies."""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=HEADLESS)
         context = await browser.new_context(user_agent=USER_AGENT)
@@ -197,13 +214,9 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                         await el.press("Control+a")
                         await el.type(caption, delay=30)
                         caption_added = True
-                        logger.info("Caption added")
                         break
                 except Exception:
                     pass
-
-            if not caption_added:
-                logger.warning("Could not find caption input; posting without caption")
 
             await page.wait_for_timeout(1000)
 
@@ -220,7 +233,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                     if await btn.is_enabled(timeout=5000):
                         await btn.click()
                         posted = True
-                        logger.info("Post button clicked")
                         break
                 except Exception:
                     pass
