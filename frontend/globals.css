@@ -1,0 +1,48 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --red: #FF2D55;
+  --cyan: #69C9D0;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0A0A0F;
+  color: #ffffff;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* TikTok dual-color glow effect */
+.tt-glow {
+  position: relative;
+}
+.tt-glow::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(135deg, var(--red), var(--cyan));
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.tt-glow:hover::before { opacity: 1; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #111117; }
+::-webkit-scrollbar-thumb { background: #2A2A3A; border-radius: 3px; }
+
+/* Status badge colours */
+.badge-pending   { background: #2A2A3A; color: #8B8B9E; }
+.badge-in_progress { background: rgba(105,201,208,0.15); color: #69C9D0; }
+.badge-completed { background: rgba(0,211,124,0.15); color: #00D37C; }
+.badge-partial   { background: rgba(255,165,0,0.15); color: #FFA500; }
+.badge-failed    { background: rgba(255,68,68,0.15); color: #FF4444; }
+.badge-success   { background: rgba(0,211,124,0.15); color: #00D37C; }
