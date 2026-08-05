@@ -2,10 +2,18 @@ import asyncio
 import json
 import os
 import logging
+import re
 from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
+
+CHROMIUM_ARGS = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+]
 
 SAMESITE_MAP = {
     "no_restriction": "None",
@@ -38,136 +46,109 @@ USER_AGENT = (
 )
 
 
-def _format_count(n: int) -> str:
-    """Format a raw integer count the same way TikTok displays it (e.g. 1200 → '1.2K')."""
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M"
-    if n >= 1_000:
-        return f"{n / 1_000:.1f}K"
-    return str(n)
-
-
 async def get_account_info(cookies: list) -> dict:
-    """Retrieve the logged-in user's profile by intercepting the API call
-    that TikTok's own page makes on load, rather than issuing a manual fetch.
-
-    Strategy
-    --------
-    1. Register a Playwright response handler BEFORE navigating, so it
-       catches every network response the page fires.
-    2. Navigate to https://www.tiktok.com/ — TikTok's own JS fires
-       user-info requests with all the correct signed params and cookies.
-    3. Capture and parse the first matching response body.
-       No manual request-signing, no CORS issues, no empty-body problems.
-    """
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=HEADLESS,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-            ],
-        )
+        browser = await p.chromium.launch(headless=HEADLESS, args=CHROMIUM_ARGS)
         context = await browser.new_context(user_agent=USER_AGENT)
 
         try:
             await context.add_cookies(normalize_cookies(cookies))
             page = await context.new_page()
 
-            captured: dict = {}
-
-            async def handle_response(response):
-                if captured:
-                    return
-                url = response.url
-                if "tiktok.com/api" in url or "tiktok.com/passport" in url:
-                    logger.info(f"TikTok API call: {url}")
-                if (
-                    "/api/user/detail/" in url
-                    or "passport/account/info" in url
-                    or "/passport/user/user_info" in url
-                    or "/api/recommend/user/" in url
-                    or "user/profile/self" in url
-                    or "/api/user/info/" in url
-                ):
-                    try:
-                        body = await response.text()
-                        if body and body.strip().startswith("{"):
-                            data = json.loads(body)
-                            if (
-                                data.get("userInfo")
-                                or data.get("data", {}).get("user_info")
-                                or data.get("data", {}).get("userInfo")
-                            ):
-                                captured["data"] = data
-                                captured["url"] = url
-                                logger.debug(f"Captured user API response from: {url}")
-                    except Exception as e:
-                        logger.debug(f"Response handler error for {url}: {e}")
-
-            page.on("response", handle_response)
-
+            # Go directly to the profile redirect page
             await page.goto(
-                "https://www.tiktok.com/",
+                "https://www.tiktok.com/profile",
                 wait_until="domcontentloaded",
                 timeout=60000,
             )
+            await page.wait_for_timeout(5000)
 
-            # Give TikTok's JS up to 10 s to fire its user-info call
-            for _ in range(20):
-                if captured:
-                    break
-                await page.wait_for_timeout(500)
+            username = None
 
-            if not captured:
-                raise Exception(
-                    "Could not intercept TikTok user-info API call — "
-                    "are these valid / non-expired TikTok cookies?"
+            # After redirect, URL should be /@username
+            current_url = page.url
+            logger.info(f"Profile redirect URL: {current_url}")
+            if "/@" in current_url:
+                username = current_url.split("/@")[1].strip("/").split("?")[0]
+                logger.info(f"Got username from redirect: {username}")
+
+            # Fallback: try the nav profile link
+            if not username:
+                await page.goto(
+                    "https://www.tiktok.com/",
+                    wait_until="domcontentloaded",
+                    timeout=60000,
                 )
+                await page.wait_for_timeout(8000)
 
-            api_result = captured["data"]
-            logger.debug(f"TikTok intercepted response keys: {list(api_result.keys())}")
+                try:
+                    link = await page.query_selector('[data-e2e="nav-profile"]')
+                    if link:
+                        href = await link.get_attribute("href") or ""
+                        if "/@" in href:
+                            username = href.split("/@")[1].strip("/").split("?")[0]
+                            logger.info(f"Got username from nav: {username}")
+                except Exception:
+                    pass
 
-            # Normalise across the two known response shapes:
-            #   Shape A  (tiktok.com homepage): { userInfo: { user: {}, stats: {} } }
-            #   Shape B  (passport endpoints):  { data: { user_info: {} } }
-            user_info = (
-                api_result.get("userInfo")
-                or api_result.get("data", {}).get("userInfo")
-                or {}
-            )
-            passport_info = api_result.get("data", {}).get("user_info") or {}
-
-            if user_info:
-                user         = user_info.get("user") or {}
-                stats        = user_info.get("stats") or {}
-                username     = user.get("uniqueId") or user.get("nickname") or ""
-                display_name = user.get("nickname") or username
-                avatar_url   = user.get("avatarLarger") or user.get("avatarMedium") or ""
-                followers    = _format_count(int(stats.get("followerCount", 0)))
-                following    = _format_count(int(stats.get("followingCount", 0)))
-                likes        = _format_count(int(stats.get("heartCount", stats.get("diggCount", 0))))
-            elif passport_info:
-                username     = passport_info.get("unique_id") or passport_info.get("nickname") or ""
-                display_name = passport_info.get("nickname") or username
-                avatar_url   = passport_info.get("avatar_larger", {}).get("url_list", [""])[0]
-                followers    = _format_count(int(passport_info.get("follower_count", 0)))
-                following    = _format_count(int(passport_info.get("following_count", 0)))
-                likes        = _format_count(int(passport_info.get("total_favorited", 0)))
-            else:
-                raise Exception(
-                    "Intercepted an API response but could not find user data inside it."
-                )
+            # Fallback: look for logged-in user data in page source
+            if not username:
+                try:
+                    content = await page.content()
+                    match = re.search(r'"webapp\.user-detail".*?"uniqueId":"([^"]+)"', content)
+                    if match:
+                        username = match.group(1)
+                        logger.info(f"Got username from page source: {username}")
+                except Exception:
+                    pass
 
             if not username:
                 raise Exception(
-                    "Could not parse username from intercepted TikTok response — "
-                    "are these valid TikTok cookies?"
+                    "Could not detect logged-in user — are these valid TikTok cookies?"
                 )
 
-            logger.info(f"TikTok intercepted: detected user @{username}")
+            await page.goto(
+                f"https://www.tiktok.com/@{username}",
+                wait_until="domcontentloaded",
+                timeout=60000,
+            )
+            await page.wait_for_timeout(8000)
+
+            followers = following = likes = "0"
+            display_name = username
+            avatar_url = ""
+
+            for attr, selector in [
+                ("followers", '[data-e2e="followers-count"]'),
+                ("following", '[data-e2e="following-count"]'),
+                ("likes", '[data-e2e="likes-count"]'),
+            ]:
+                try:
+                    el = await page.query_selector(selector)
+                    if el:
+                        val = await el.inner_text()
+                        if attr == "followers":
+                            followers = val
+                        elif attr == "following":
+                            following = val
+                        else:
+                            likes = val
+                except Exception:
+                    pass
+
+            try:
+                el = await page.query_selector('[data-e2e="user-title"]')
+                if el:
+                    display_name = await el.inner_text()
+            except Exception:
+                pass
+
+            try:
+                el = await page.query_selector('[data-e2e="user-avatar"] img')
+                if el:
+                    avatar_url = await el.get_attribute("src") or ""
+            except Exception:
+                pass
 
             return {
                 "username": username,
@@ -184,15 +165,7 @@ async def get_account_info(cookies: list) -> dict:
 
 async def post_video(cookies: list, video_path: str, caption: str) -> dict:
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=HEADLESS,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-            ],
-        )
+        browser = await p.chromium.launch(headless=HEADLESS, args=CHROMIUM_ARGS)
         context = await browser.new_context(user_agent=USER_AGENT)
 
         try:
@@ -230,7 +203,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 '[data-e2e="video-desc-input"]',
                 '.notranslate[contenteditable]',
             ]
-            caption_added = False
             for sel in caption_selectors:
                 try:
                     el = iframe_locator.locator(sel).first
@@ -238,7 +210,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                         await el.click()
                         await el.press("Control+a")
                         await el.type(caption, delay=30)
-                        caption_added = True
                         break
                 except Exception:
                     pass
