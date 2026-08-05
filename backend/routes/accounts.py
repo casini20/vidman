@@ -19,7 +19,7 @@ def row_to_dict(row) -> dict:
 
 @router.get("/")
 async def list_accounts():
-    async with await get_db() as db:
+    async with get_db() as db:
         cursor = await db.execute(
             "SELECT id, username, display_name, avatar_url, "
             "followers, following, likes, last_synced, created_at FROM accounts"
@@ -50,7 +50,7 @@ async def add_account(request: AddAccountRequest):
     now = datetime.now(timezone.utc).isoformat()
     cookies_str = json.dumps(cookies)
 
-    async with await get_db() as db:
+    async with get_db() as db:
         cursor = await db.execute(
             "SELECT id FROM accounts WHERE username = ?", (info["username"],)
         )
@@ -100,7 +100,7 @@ async def add_account(request: AddAccountRequest):
 
 @router.delete("/{account_id}")
 async def remove_account(account_id: str):
-    async with await get_db() as db:
+    async with get_db() as db:
         cursor = await db.execute(
             "SELECT id FROM accounts WHERE id=?", (account_id,)
         )
@@ -113,7 +113,7 @@ async def remove_account(account_id: str):
 
 @router.post("/{account_id}/sync")
 async def sync_stats(account_id: str):
-    async with await get_db() as db:
+    async with get_db() as db:
         cursor = await db.execute(
             "SELECT cookies FROM accounts WHERE id=?", (account_id,)
         )
@@ -128,7 +128,7 @@ async def sync_stats(account_id: str):
         raise HTTPException(status_code=500, detail=f"Sync failed: {exc}")
 
     now = datetime.now(timezone.utc).isoformat()
-    async with await get_db() as db:
+    async with get_db() as db:
         await db.execute(
             """UPDATE accounts
                SET followers=?, following=?, likes=?, display_name=?, avatar_url=?, last_synced=?

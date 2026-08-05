@@ -23,7 +23,7 @@ os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 async def _process_post(post_id: str, video_path: str, caption: str):
     """Run in background: iterate accounts and post the video one by one."""
-    async with await get_db() as db:
+    async with get_db() as db:
         cursor = await db.execute(
             "SELECT id, account_id, username FROM post_accounts WHERE post_id=?",
             (post_id,),
@@ -42,7 +42,7 @@ async def _process_post(post_id: str, video_path: str, caption: str):
         username = item["username"]
 
         try:
-            async with await get_db() as db:
+            async with get_db() as db:
                 cursor = await db.execute(
                     "SELECT cookies FROM accounts WHERE id=?", (account_id,)
                 )
@@ -53,7 +53,7 @@ async def _process_post(post_id: str, video_path: str, caption: str):
 
             await post_video(cookies, video_path, caption)
 
-            async with await get_db() as db:
+            async with get_db() as db:
                 await db.execute(
                     "UPDATE post_accounts SET status='success', posted_at=? WHERE id=?",
                     (datetime.now(timezone.utc).isoformat(), pa_id),
@@ -65,7 +65,7 @@ async def _process_post(post_id: str, video_path: str, caption: str):
 
         except Exception as exc:
             logger.error(f"Failed posting to @{username}: {exc}")
-            async with await get_db() as db:
+            async with get_db() as db:
                 await db.execute(
                     "UPDATE post_accounts SET status='failed', error_message=? WHERE id=?",
                     (str(exc), pa_id),
@@ -82,7 +82,7 @@ async def _process_post(post_id: str, video_path: str, caption: str):
         else ("failed" if success == 0 else "partial")
     )
 
-    async with await get_db() as db:
+    async with get_db() as db:
         await db.execute(
             "UPDATE posts SET status=?, success_count=?, failed_count=? WHERE id=?",
             (final, success, failed, post_id),
@@ -118,7 +118,7 @@ async def create_post(
     with open(video_path, "wb") as fh:
         fh.write(await video.read())
 
-    async with await get_db() as db:
+    async with get_db() as db:
         for aid in ids:
             cursor = await db.execute(
                 "SELECT id FROM accounts WHERE id=?", (aid,)
@@ -154,7 +154,7 @@ async def create_post(
 
 @router.get("/")
 async def list_posts():
-    async with await get_db() as db:
+    async with get_db() as db:
         cursor = await db.execute(
             """SELECT id, caption, video_filename, status,
                       total_accounts, success_count, failed_count, created_at
@@ -165,7 +165,7 @@ async def list_posts():
 
 @router.get("/{post_id}")
 async def get_post(post_id: str):
-    async with await get_db() as db:
+    async with get_db() as db:
         cursor = await db.execute("SELECT * FROM posts WHERE id=?", (post_id,))
         post = await cursor.fetchone()
         if not post:
