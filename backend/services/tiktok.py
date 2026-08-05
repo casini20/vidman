@@ -38,7 +38,31 @@ USER_AGENT = (
 )
 
 
+def _format_count(n: int) -> str:
+    """Format a raw integer count the same way TikTok displays it (e.g. 1200 → '1.2K')."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n)
+
+
 async def get_account_info(cookies: list) -> dict:
+    """Retrieve the logged-in user's profile by calling TikTok's internal
+    user-info API endpoint instead of scraping DOM elements.
+
+    Strategy
+    --------
+    1. Load https://www.tiktok.com/ in a Playwright page so that all
+       cookies (including the anti-bot ``msToken`` / ``tt_chain_token``)
+       are attached to the browser context.
+    2. Use ``page.evaluate`` to call ``fetch`` *from inside the page*,
+       which means the request carries every cookie and the same
+       ``Origin``/``Referer`` headers that a real browser would send.
+       This avoids having to replicate TikTok's request-signing logic in
+       Python.
+    3. Parse the JSON response — no HTML scraping required.
+    """
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=HEADLESS)
         context = await browser.new_context(user_agent=USER_AGENT)
@@ -47,110 +71,99 @@ async def get_account_info(cookies: list) -> dict:
             await context.add_cookies(normalize_cookies(cookies))
             page = await context.new_page()
 
+            # Navigate to TikTok so cookies are active and the page
+            # origin matches what the API expects.
             await page.goto(
-                "https://www.tiktok.com/", wait_until="domcontentloaded", timeout=60000
-            )
-            await page.wait_for_timeout(8000)
-
-            username = None
-
-            # Try to get username from cookies directly
-            for cookie in cookies:
-                if cookie.get("name") == "sid_tt" and cookie.get("value"):
-                    pass  # we have session but need username
-
-            # Try multiple selectors for the profile link
-            selectors = [
-                '[data-e2e="nav-profile"]',
-                'a[href*="/@"]',
-                '[data-e2e="profile-icon"]',
-                'a[href^="/@"]',
-            ]
-            
-            for selector in selectors:
-                try:
-                    if selector == 'a[href*="/@"]':
-                        anchors = await page.query_selector_all(selector)
-                        for a in anchors:
-                            href = await a.get_attribute("href") or ""
-                            if "/@" in href:
-                                candidate = href.split("/@")[1].strip("/").split("?")[0]
-                                if candidate and "/" not in candidate and len(candidate) > 0:
-                                    username = candidate
-                                    break
-                    else:
-                        link = await page.query_selector(selector)
-                        if link:
-                            href = await link.get_attribute("href") or ""
-                            if "/@" in href:
-                                username = href.split("/@")[1].strip("/").split("?")[0]
-                except Exception:
-                    pass
-                if username:
-                    break
-
-            # Try getting username from page content
-            if not username:
-                try:
-                    content = await page.content()
-                    import re
-                    # Look for profile URL patterns
-                    matches = re.findall(r'"uniqueId":"([^"]+)"', content)
-                    if matches:
-                        username = matches[0]
-                        logger.error(f"Found username from page content: {username}")
-                except Exception:
-                    pass
-
-            logger.error(f"Detected username: {username}")
-
-            if not username:
-                raise Exception(
-                    "Could not detect logged-in user — are these valid TikTok cookies?"
-                )
-
-            await page.goto(
-                f"https://www.tiktok.com/@{username}",
+                "https://www.tiktok.com/",
                 wait_until="domcontentloaded",
                 timeout=60000,
             )
-            await page.wait_for_timeout(8000)
+            await page.wait_for_timeout(3000)
 
-            followers = following = likes = "0"
-            display_name = username
-            avatar_url = ""
+            # Call TikTok's internal "self" user-info endpoint from
+            # inside the page context so all cookies/headers are sent
+            # automatically.
+            api_result = await page.evaluate(
+                """async () => {
+                    const params = new URLSearchParams({
+                        aid: '1988',
+                        app_language: 'en',
+                        app_name: 'tiktok_web',
+                        browser_language: navigator.language || 'en-US',
+                        browser_name: 'Mozilla',
+                        browser_online: 'true',
+                        browser_platform: 'Win32',
+                        browser_version: navigator.userAgent,
+                        channel: 'tiktok_web',
+                        cookie_enabled: 'true',
+                        device_platform: 'web_pc',
+                        focus_state: 'true',
+                        from_page: 'user',
+                        history_len: String(history.length),
+                        is_fullscreen: 'false',
+                        is_page_visible: 'true',
+                        os: 'windows',
+                        priority_region: '',
+                        referer: '',
+                        region: 'US',
+                        screen_height: String(screen.height),
+                        screen_width: String(screen.width),
+                        tz_name: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                        webcast_language: 'en',
+                    });
 
-            for attr, selector in [
-                ("followers", '[data-e2e="followers-count"]'),
-                ("following", '[data-e2e="following-count"]'),
-                ("likes", '[data-e2e="likes-count"]'),
-            ]:
-                try:
-                    el = await page.query_selector(selector)
-                    if el:
-                        val = await el.inner_text()
-                        if attr == "followers":
-                            followers = val
-                        elif attr == "following":
-                            following = val
-                        else:
-                            likes = val
-                except Exception:
-                    pass
+                    const url =
+                        'https://www.tiktok.com/api/user/detail/?' + params.toString();
 
-            try:
-                el = await page.query_selector('[data-e2e="user-title"]')
-                if el:
-                    display_name = await el.inner_text()
-            except Exception:
-                pass
+                    const resp = await fetch(url, {
+                        method: 'GET',
+                        credentials: 'include',
+                        headers: {
+                            'Accept': 'application/json, text/plain, */*',
+                            'Referer': 'https://www.tiktok.com/',
+                        },
+                    });
 
-            try:
-                el = await page.query_selector('[data-e2e="user-avatar"] img')
-                if el:
-                    avatar_url = await el.get_attribute("src") or ""
-            except Exception:
-                pass
+                    if (!resp.ok) {
+                        return { error: `HTTP ${resp.status}` };
+                    }
+                    return await resp.json();
+                }"""
+            )
+
+            logger.debug(f"TikTok API raw response keys: {list(api_result.keys())}")
+
+            # statusCode 0 means success; anything else is an auth/API error.
+            status_code = api_result.get("statusCode", api_result.get("status_code", -1))
+            if status_code != 0:
+                raise Exception(
+                    f"TikTok API returned statusCode={status_code} — "
+                    "are these valid / non-expired TikTok cookies?"
+                )
+
+            user = (api_result.get("userInfo") or api_result.get("user") or {})
+            # The response nests data under userInfo.user and userInfo.stats
+            if "user" in user:
+                stats = user.get("stats", {})
+                user = user["user"]
+            else:
+                stats = api_result.get("userInfo", {}).get("stats", {})
+
+            username = user.get("uniqueId") or user.get("nickname") or ""
+            display_name = user.get("nickname") or username
+            avatar_url = user.get("avatarLarger") or user.get("avatarMedium") or ""
+
+            followers = _format_count(int(stats.get("followerCount", 0)))
+            following = _format_count(int(stats.get("followingCount", 0)))
+            likes = _format_count(int(stats.get("heartCount", stats.get("diggCount", 0))))
+
+            if not username:
+                raise Exception(
+                    "Could not parse username from TikTok API response — "
+                    "are these valid TikTok cookies?"
+                )
+
+            logger.info(f"TikTok API: detected user @{username}")
 
             return {
                 "username": username,
