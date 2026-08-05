@@ -74,10 +74,15 @@ async def get_account_info(cookies: list) -> dict:
                 if captured:
                     return
                 url = response.url
+                if "tiktok.com/api" in url or "tiktok.com/passport" in url:
+                    logger.info(f"TikTok API call: {url}")
                 if (
                     "/api/user/detail/" in url
                     or "passport/account/info" in url
                     or "/passport/user/user_info" in url
+                    or "/api/recommend/user/" in url
+                    or "user/profile/self" in url
+                    or "/api/user/info/" in url
                 ):
                     try:
                         body = await response.text()
