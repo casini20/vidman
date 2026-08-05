@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from database import init_db
-import accounts, posts
+from routes import accounts, posts
 import os
 
 @asynccontextmanager
