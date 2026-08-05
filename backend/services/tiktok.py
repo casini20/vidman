@@ -124,14 +124,30 @@ async def get_account_info(cookies: list) -> dict:
                         },
                     });
 
-                    if (!resp.ok) {
-                        return { error: `HTTP ${resp.status}` };
-                    }
-                    return await resp.json();
+                    const text = await resp.text();
+                    return { status: resp.status, body: text };
                 }"""
             )
 
-            logger.debug(f"TikTok API raw response keys: {list(api_result.keys())}")
+            raw_body = api_result.get("body", "")
+            http_status = api_result.get("status", 0)
+
+            logger.debug(f"TikTok API HTTP {http_status}, body preview: {raw_body[:200]}")
+
+            if not raw_body or not raw_body.strip():
+                raise Exception(
+                    f"TikTok API returned HTTP {http_status} with an empty body — "
+                    "cookies may be expired or blocked."
+                )
+
+            try:
+                api_result = json.loads(raw_body)
+            except json.JSONDecodeError as e:
+                raise Exception(
+                    f"TikTok API returned non-JSON (HTTP {http_status}): {raw_body[:300]}"
+                ) from e
+
+            logger.debug(f"TikTok API response keys: {list(api_result.keys())}")
 
             # statusCode 0 means success; anything else is an auth/API error.
             status_code = api_result.get("statusCode", api_result.get("status_code", -1))
