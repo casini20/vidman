@@ -48,20 +48,17 @@ def _format_count(n: int) -> str:
 
 
 async def get_account_info(cookies: list) -> dict:
-    """Retrieve the logged-in user's profile by calling TikTok's internal
-    user-info API endpoint instead of scraping DOM elements.
+    """Retrieve the logged-in user's profile by intercepting the API call
+    that TikTok's own page makes on load, rather than issuing a manual fetch.
 
     Strategy
     --------
-    1. Load https://www.tiktok.com/ in a Playwright page so that all
-       cookies (including the anti-bot ``msToken`` / ``tt_chain_token``)
-       are attached to the browser context.
-    2. Use ``page.evaluate`` to call ``fetch`` *from inside the page*,
-       which means the request carries every cookie and the same
-       ``Origin``/``Referer`` headers that a real browser would send.
-       This avoids having to replicate TikTok's request-signing logic in
-       Python.
-    3. Parse the JSON response — no HTML scraping required.
+    1. Register a Playwright response handler BEFORE navigating, so it
+       catches every network response the page fires.
+    2. Navigate to https://www.tiktok.com/ — TikTok's own JS fires
+       user-info requests with all the correct signed params and cookies.
+    3. Capture and parse the first matching response body.
+       No manual request-signing, no CORS issues, no empty-body problems.
     """
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=HEADLESS)
@@ -71,115 +68,93 @@ async def get_account_info(cookies: list) -> dict:
             await context.add_cookies(normalize_cookies(cookies))
             page = await context.new_page()
 
-            # Navigate to TikTok so cookies are active and the page
-            # origin matches what the API expects.
+            captured: dict = {}
+
+            async def handle_response(response):
+                if captured:
+                    return
+                url = response.url
+                if (
+                    "/api/user/detail/" in url
+                    or "passport/account/info" in url
+                    or "/passport/user/user_info" in url
+                ):
+                    try:
+                        body = await response.text()
+                        if body and body.strip().startswith("{"):
+                            data = json.loads(body)
+                            if (
+                                data.get("userInfo")
+                                or data.get("data", {}).get("user_info")
+                                or data.get("data", {}).get("userInfo")
+                            ):
+                                captured["data"] = data
+                                captured["url"] = url
+                                logger.debug(f"Captured user API response from: {url}")
+                    except Exception as e:
+                        logger.debug(f"Response handler error for {url}: {e}")
+
+            page.on("response", handle_response)
+
             await page.goto(
                 "https://www.tiktok.com/",
                 wait_until="domcontentloaded",
                 timeout=60000,
             )
-            await page.wait_for_timeout(3000)
 
-            # Call TikTok's internal "self" user-info endpoint from
-            # inside the page context so all cookies/headers are sent
-            # automatically.
-            api_result = await page.evaluate(
-                """async () => {
-                    const params = new URLSearchParams({
-                        aid: '1988',
-                        app_language: 'en',
-                        app_name: 'tiktok_web',
-                        browser_language: navigator.language || 'en-US',
-                        browser_name: 'Mozilla',
-                        browser_online: 'true',
-                        browser_platform: 'Win32',
-                        browser_version: navigator.userAgent,
-                        channel: 'tiktok_web',
-                        cookie_enabled: 'true',
-                        device_platform: 'web_pc',
-                        focus_state: 'true',
-                        from_page: 'user',
-                        history_len: String(history.length),
-                        is_fullscreen: 'false',
-                        is_page_visible: 'true',
-                        os: 'windows',
-                        priority_region: '',
-                        referer: '',
-                        region: 'US',
-                        screen_height: String(screen.height),
-                        screen_width: String(screen.width),
-                        tz_name: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                        webcast_language: 'en',
-                    });
+            # Give TikTok's JS up to 10 s to fire its user-info call
+            for _ in range(20):
+                if captured:
+                    break
+                await page.wait_for_timeout(500)
 
-                    const url =
-                        'https://www.tiktok.com/api/user/detail/?' + params.toString();
-
-                    const resp = await fetch(url, {
-                        method: 'GET',
-                        credentials: 'include',
-                        headers: {
-                            'Accept': 'application/json, text/plain, */*',
-                            'Referer': 'https://www.tiktok.com/',
-                        },
-                    });
-
-                    const text = await resp.text();
-                    return { status: resp.status, body: text };
-                }"""
-            )
-
-            raw_body = api_result.get("body", "")
-            http_status = api_result.get("status", 0)
-
-            logger.debug(f"TikTok API HTTP {http_status}, body preview: {raw_body[:200]}")
-
-            if not raw_body or not raw_body.strip():
+            if not captured:
                 raise Exception(
-                    f"TikTok API returned HTTP {http_status} with an empty body — "
-                    "cookies may be expired or blocked."
-                )
-
-            try:
-                api_result = json.loads(raw_body)
-            except json.JSONDecodeError as e:
-                raise Exception(
-                    f"TikTok API returned non-JSON (HTTP {http_status}): {raw_body[:300]}"
-                ) from e
-
-            logger.debug(f"TikTok API response keys: {list(api_result.keys())}")
-
-            # statusCode 0 means success; anything else is an auth/API error.
-            status_code = api_result.get("statusCode", api_result.get("status_code", -1))
-            if status_code != 0:
-                raise Exception(
-                    f"TikTok API returned statusCode={status_code} — "
+                    "Could not intercept TikTok user-info API call — "
                     "are these valid / non-expired TikTok cookies?"
                 )
 
-            user = (api_result.get("userInfo") or api_result.get("user") or {})
-            # The response nests data under userInfo.user and userInfo.stats
-            if "user" in user:
-                stats = user.get("stats", {})
-                user = user["user"]
+            api_result = captured["data"]
+            logger.debug(f"TikTok intercepted response keys: {list(api_result.keys())}")
+
+            # Normalise across the two known response shapes:
+            #   Shape A  (tiktok.com homepage): { userInfo: { user: {}, stats: {} } }
+            #   Shape B  (passport endpoints):  { data: { user_info: {} } }
+            user_info = (
+                api_result.get("userInfo")
+                or api_result.get("data", {}).get("userInfo")
+                or {}
+            )
+            passport_info = api_result.get("data", {}).get("user_info") or {}
+
+            if user_info:
+                user         = user_info.get("user") or {}
+                stats        = user_info.get("stats") or {}
+                username     = user.get("uniqueId") or user.get("nickname") or ""
+                display_name = user.get("nickname") or username
+                avatar_url   = user.get("avatarLarger") or user.get("avatarMedium") or ""
+                followers    = _format_count(int(stats.get("followerCount", 0)))
+                following    = _format_count(int(stats.get("followingCount", 0)))
+                likes        = _format_count(int(stats.get("heartCount", stats.get("diggCount", 0))))
+            elif passport_info:
+                username     = passport_info.get("unique_id") or passport_info.get("nickname") or ""
+                display_name = passport_info.get("nickname") or username
+                avatar_url   = passport_info.get("avatar_larger", {}).get("url_list", [""])[0]
+                followers    = _format_count(int(passport_info.get("follower_count", 0)))
+                following    = _format_count(int(passport_info.get("following_count", 0)))
+                likes        = _format_count(int(passport_info.get("total_favorited", 0)))
             else:
-                stats = api_result.get("userInfo", {}).get("stats", {})
-
-            username = user.get("uniqueId") or user.get("nickname") or ""
-            display_name = user.get("nickname") or username
-            avatar_url = user.get("avatarLarger") or user.get("avatarMedium") or ""
-
-            followers = _format_count(int(stats.get("followerCount", 0)))
-            following = _format_count(int(stats.get("followingCount", 0)))
-            likes = _format_count(int(stats.get("heartCount", stats.get("diggCount", 0))))
+                raise Exception(
+                    "Intercepted an API response but could not find user data inside it."
+                )
 
             if not username:
                 raise Exception(
-                    "Could not parse username from TikTok API response — "
+                    "Could not parse username from intercepted TikTok response — "
                     "are these valid TikTok cookies?"
                 )
 
-            logger.info(f"TikTok API: detected user @{username}")
+            logger.info(f"TikTok intercepted: detected user @{username}")
 
             return {
                 "username": username,
