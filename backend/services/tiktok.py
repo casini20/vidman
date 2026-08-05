@@ -19,10 +19,21 @@ def normalize_cookies(cookies: list) -> list:
     result = []
     for c in cookies:
         cookie = dict(c)
+        # Fix sameSite
         raw = (cookie.get("sameSite") or "").lower()
         cookie["sameSite"] = SAMESITE_MAP.get(raw, "None")
+        # Remove keys Playwright doesn't accept
         for key in ["hostOnly", "session", "storeId", "id"]:
             cookie.pop(key, None)
+        # Ensure path exists
+        if not cookie.get("path"):
+            cookie["path"] = "/"
+        # Ensure domain exists
+        if not cookie.get("domain"):
+            cookie["url"] = "https://www.tiktok.com"
+        # Remove expirationDate if it's None or 0
+        if not cookie.get("expirationDate"):
+            cookie.pop("expirationDate", None)
         result.append(cookie)
     return result
 
@@ -43,7 +54,6 @@ async def get_account_info(cookies: list) -> dict:
             await context.add_cookies(normalize_cookies(cookies))
             page = await context.new_page()
 
-            # Land on TikTok home to detect logged-in username
             await page.goto(
                 "https://www.tiktok.com/", wait_until="domcontentloaded", timeout=60000
             )
@@ -51,7 +61,6 @@ async def get_account_info(cookies: list) -> dict:
 
             username = None
 
-            # Try sidebar profile link first
             try:
                 link = await page.query_selector('[data-e2e="nav-profile"]')
                 if link:
@@ -61,7 +70,6 @@ async def get_account_info(cookies: list) -> dict:
             except Exception:
                 pass
 
-            # Fallback: look at any /@ anchor
             if not username:
                 try:
                     anchors = await page.query_selector_all('a[href*="/@"]')
@@ -80,16 +88,12 @@ async def get_account_info(cookies: list) -> dict:
                     "Could not detect logged-in user — are these valid TikTok cookies?"
                 )
 
-            # Go to that profile page
             await page.goto(
                 f"https://www.tiktok.com/@{username}",
                 wait_until="domcontentloaded",
                 timeout=60000,
             )
             await page.wait_for_timeout(8000)
-
-            def safe_text(el):
-                return el
 
             followers = following = likes = "0"
             display_name = username
@@ -104,7 +108,6 @@ async def get_account_info(cookies: list) -> dict:
                     el = await page.query_selector(selector)
                     if el:
                         val = await el.inner_text()
-                        locals()[attr]  # just reference it
                         if attr == "followers":
                             followers = val
                         elif attr == "following":
@@ -158,7 +161,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             )
             await page.wait_for_timeout(8000)
 
-            # Dismiss cookie consent if present
             for btn_text in ["Accept all", "Accept All", "Accept", "Decline optional"]:
                 try:
                     btn = page.get_by_role("button", name=btn_text)
@@ -169,18 +171,14 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 except Exception:
                     pass
 
-            # --- Locate the upload iframe ---
             iframe_locator = page.frame_locator("iframe").first
-            # Wait for the file input inside the iframe
             file_input = iframe_locator.locator('input[type="file"]')
             await file_input.wait_for(timeout=15000)
             await file_input.set_input_files(video_path)
             logger.info("Video file set — waiting for processing...")
 
-            # Wait for upload + encoding to finish (TikTok shows a progress bar)
             await page.wait_for_timeout(10000)
 
-            # --- Caption ---
             caption_selectors = [
                 '.public-DraftEditor-content',
                 '[contenteditable="true"]',
@@ -193,7 +191,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                     el = iframe_locator.locator(sel).first
                     if await el.is_visible(timeout=4000):
                         await el.click()
-                        # Clear existing content then type
                         await el.press("Control+a")
                         await el.type(caption, delay=30)
                         caption_added = True
@@ -207,7 +204,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
 
             await page.wait_for_timeout(1000)
 
-            # --- Post button ---
             post_selectors = [
                 'button[data-e2e="post-btn"]',
                 'button:has-text("Post")',
@@ -229,7 +225,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             if not posted:
                 raise Exception("Could not find or click the Post button")
 
-            # Wait for success / redirect
             await page.wait_for_timeout(6000)
             return {"success": True}
 
