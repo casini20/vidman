@@ -7,6 +7,25 @@ from playwright.async_api import async_playwright
 logger = logging.getLogger(__name__)
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 
+SAMESITE_MAP = {
+    "no_restriction": "None",
+    "lax": "Lax",
+    "strict": "Strict",
+    "unspecified": "None",
+}
+
+def normalize_cookies(cookies: list) -> list:
+    """Normalize Cookie-Editor export format to Playwright-compatible format."""
+    result = []
+    for c in cookies:
+        cookie = dict(c)
+        raw = (cookie.get("sameSite") or "").lower()
+        cookie["sameSite"] = SAMESITE_MAP.get(raw, "None")
+        for key in ["hostOnly", "session", "storeId", "id"]:
+            cookie.pop(key, None)
+        result.append(cookie)
+    return result
+
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -21,7 +40,7 @@ async def get_account_info(cookies: list) -> dict:
         context = await browser.new_context(user_agent=USER_AGENT)
 
         try:
-            await context.add_cookies(cookies)
+            await context.add_cookies(normalize_cookies(cookies))
             page = await context.new_page()
 
             # Land on TikTok home to detect logged-in username
@@ -129,7 +148,7 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
         context = await browser.new_context(user_agent=USER_AGENT)
 
         try:
-            await context.add_cookies(cookies)
+            await context.add_cookies(normalize_cookies(cookies))
             page = await context.new_page()
 
             await page.goto(
