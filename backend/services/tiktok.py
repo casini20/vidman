@@ -59,6 +59,9 @@ async def get_account_info(cookies: list) -> dict:
             )
             await page.wait_for_timeout(8000)
 
+            # Debug: log page title and URL
+            logger.error(f"Page URL: {page.url}")
+            logger.error(f"Page title: {await page.title()}")
             username = None
 
             try:
