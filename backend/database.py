@@ -1,12 +1,14 @@
 import aiosqlite
 import os
+from contextlib import asynccontextmanager
 
 DB_PATH = os.getenv("DB_PATH", "tiktok_manager.db")
 
+@asynccontextmanager
 async def get_db():
-    db = await aiosqlite.connect(DB_PATH)
-    db.row_factory = aiosqlite.Row
-    return db
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        yield db
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
