@@ -61,7 +61,15 @@ async def get_account_info(cookies: list) -> dict:
        No manual request-signing, no CORS issues, no empty-body problems.
     """
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=HEADLESS)
+        browser = await p.chromium.launch(
+            headless=HEADLESS,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+            ],
+        )
         context = await browser.new_context(user_agent=USER_AGENT)
 
         try:
@@ -176,7 +184,15 @@ async def get_account_info(cookies: list) -> dict:
 
 async def post_video(cookies: list, video_path: str, caption: str) -> dict:
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=HEADLESS)
+        browser = await p.chromium.launch(
+            headless=HEADLESS,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+            ],
+        )
         context = await browser.new_context(user_agent=USER_AGENT)
 
         try:
