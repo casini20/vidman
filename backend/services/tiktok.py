@@ -77,6 +77,30 @@ async def get_account_info(cookies: list) -> dict:
     raise Exception("Could not verify TikTok session - please re-export your cookies and try again")
 
 
+async def click_post_button(page) -> bool:
+    """Try to click the Post/Plaatsen button."""
+    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    await page.wait_for_timeout(1000)
+    post_selectors = [
+        'button:has-text("Plaatsen")',
+        'button:has-text("Post")',
+        'button[data-e2e="post-btn"]',
+        '[class*="post-btn"]',
+        'div[class*="btn-post"]',
+    ]
+    for sel in post_selectors:
+        for frame in [page] + list(page.frames):
+            try:
+                btn = frame.locator(sel).first if hasattr(frame, 'locator') else None
+                if btn and await btn.is_enabled(timeout=2000):
+                    await btn.click()
+                    logger.info(f"Clicked post button via {sel}")
+                    return True
+            except Exception:
+                pass
+    return False
+
+
 async def post_video(cookies: list, video_path: str, caption: str) -> dict:
     from playwright.async_api import async_playwright
 
@@ -109,18 +133,12 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             )
             await page.wait_for_timeout(5000)
             logger.info(f"Upload page URL: {page.url}")
-            logger.info(f"Upload page title: {await page.title()}")
 
             await page.screenshot(path="upload_page.png")
 
             frames = page.frames
-            logger.info(f"Number of frames: {len(frames)}")
-            for i, frame in enumerate(frames):
-                logger.info(f"Frame {i}: {frame.url}")
-
             file_input = page.locator('input[type="file"]')
             count = await file_input.count()
-            logger.info(f"File inputs found directly: {count}")
 
             if count > 0:
                 await file_input.first.set_input_files(video_path)
@@ -129,7 +147,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 for i, frame in enumerate(frames):
                     try:
                         inputs = await frame.query_selector_all('input[type="file"]')
-                        logger.info(f"Frame {i} has {len(inputs)} file inputs")
                         if inputs:
                             await inputs[0].set_input_files(video_path)
                             logger.info(f"File set via frame {i}!")
@@ -141,16 +158,15 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
 
             await page.wait_for_timeout(30000)
             await page.screenshot(path="after_upload.png")
-            logger.info("Screenshot saved to after_upload.png")
 
-            # Handle popups - Turn on content checks and dismiss Got it
+            # Handle initial popups
             for btn_text in ["Turn on", "Got it", "Skip", "Close"]:
                 try:
                     btn = page.get_by_role("button", name=btn_text)
                     if await btn.is_visible(timeout=2000):
                         await btn.click()
                         await page.wait_for_timeout(1000)
-                        logger.info(f"Clicked popup button: {btn_text}")
+                        logger.info(f"Clicked popup: {btn_text}")
                 except Exception:
                     pass
 
@@ -174,36 +190,87 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                     except Exception:
                         pass
 
+            # Wait for content check to complete (up to 15 minutes)
+            logger.info("Waiting for content check...")
+            for _ in range(90):
+                try:
+                    done_texts = [
+                        'text="Controle voltooid"',
+                        'text="Check complete"',
+                        'text="No issues found"',
+                        'text="Geen problemen gevonden"',
+                        'text="Enkele mogelijke schendingen gevonden"',
+                    ]
+                    check_done = False
+                    for text in done_texts:
+                        try:
+                            if await page.locator(text).is_visible(timeout=1000):
+                                check_done = True
+                                logger.info(f"Content check done: {text}")
+                                break
+                        except Exception:
+                            pass
+                    if check_done:
+                        break
+                except Exception:
+                    pass
+                await page.wait_for_timeout(10000)
+
             await page.wait_for_timeout(1000)
             await page.screenshot(path="before_post.png")
-            logger.info("Screenshot saved to before_post.png")
 
-            # Post button
-            post_selectors = [
-                'button[data-e2e="post-btn"]',
-                'button:has-text("Post")',
-                'button:has-text("Plaatsen")',
-                '[class*="post-btn"]',
-                'div[class*="btn-post"]',
-            ]
-            posted = False
-            for sel in post_selectors:
-                for frame in [page] + list(page.frames):
-                    try:
-                        btn = frame.locator(sel).first if hasattr(frame, 'locator') else None
-                        if btn and await btn.is_enabled(timeout=2000):
-                            await btn.click()
-                            posted = True
-                            logger.info(f"Posted via {sel}")
-                            break
-                    except Exception:
-                        pass
-                if posted:
-                    break
-
+            # Click post button
+            posted = await click_post_button(page)
             if not posted:
                 await page.screenshot(path="post_failed.png")
                 raise Exception("Could not find or click the Post button")
+
+            # Handle "Post now" confirmation popup (Dutch/English)
+            await page.wait_for_timeout(2000)
+            for btn_text in ["Nu plaatsen", "Post now", "Confirm", "Continue"]:
+                try:
+                    btn = page.get_by_role("button", name=btn_text)
+                    if await btn.is_visible(timeout=3000):
+                        await btn.click()
+                        logger.info(f"Clicked confirmation: {btn_text}")
+                        break
+                except Exception:
+                    pass
+
+            # Handle "Content may be limited" warning popup - close it and post anyway
+            await page.wait_for_timeout(2000)
+            warning_texts = [
+                'text="Content kan worden beperkt"',
+                'text="Content may be limited"',
+            ]
+            for text in warning_texts:
+                try:
+                    if await page.locator(text).is_visible(timeout=2000):
+                        logger.info("Content warning popup detected, closing...")
+                        # Click the X button to close
+                        close_btn = page.locator('button[aria-label="Close"], button:has-text("×"), [class*="close"]').first
+                        try:
+                            await close_btn.click(timeout=2000)
+                        except Exception:
+                            # Try pressing Escape
+                            await page.keyboard.press("Escape")
+                        await page.wait_for_timeout(1000)
+                        # Click post again
+                        await click_post_button(page)
+                        # Handle "Post now" popup again
+                        await page.wait_for_timeout(2000)
+                        for btn_text in ["Nu plaatsen", "Post now", "Confirm"]:
+                            try:
+                                btn = page.get_by_role("button", name=btn_text)
+                                if await btn.is_visible(timeout=3000):
+                                    await btn.click()
+                                    logger.info(f"Clicked post confirmation: {btn_text}")
+                                    break
+                            except Exception:
+                                pass
+                        break
+                except Exception:
+                    pass
 
             await page.wait_for_timeout(6000)
             return {"success": True}
