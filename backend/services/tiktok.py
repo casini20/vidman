@@ -324,25 +324,40 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             # Handle "Post now" confirmation popup
             await handle_post_confirmation(page)
 
-            # Handle "Content may be limited" warning popup
+            # Handle "Content may be restricted/limited" warning popup
             await page.wait_for_timeout(2000)
-            warning_texts = [
-                'text="Content kan worden beperkt"',
-                'text="Content may be limited"',
+            warning_strings = [
+                "Content may be restricted",
+                "Content kan worden beperkt",
+                "Content may be limited",
             ]
-            for text in warning_texts:
+            for text in warning_strings:
                 try:
-                    if await page.locator(text).is_visible(timeout=2000):
-                        logger.info("Content warning popup detected, closing...")
-                        close_btn = page.locator('svg[class*="close"], button[class*="close"], [data-e2e="modal-close-button"]').first
+                    if await page.locator(f'text="{text}"').is_visible(timeout=2000):
+                        logger.info(f"Content warning popup detected: {text}, closing...")
+                        # Coordinate click first — X is at (~957, 93)
                         try:
-                            await close_btn.click(timeout=2000)
-                        except Exception:
-                            try:
-                                await page.locator('text="Content kan worden beperkt"').locator('..').locator('..').locator('button').first.click()
-                            except Exception:
-                                await page.keyboard.press("Escape")
+                            await page.mouse.click(957, 93)
+                            logger.info("Closed modal via coordinate click on X (957, 93)")
+                        except Exception as e:
+                            logger.info(f"Coordinate X click failed: {e}")
+                            # Fallback to selectors
+                            for close_sel in [
+                                '[data-e2e="modal-close-button"]',
+                                'button[class*="close"]',
+                                'svg[class*="close"]',
+                                'button:has-text("×")',
+                            ]:
+                                try:
+                                    btn = page.locator(close_sel).first
+                                    if await btn.is_visible(timeout=1000):
+                                        await btn.click()
+                                        break
+                                except Exception:
+                                    pass
                         await page.wait_for_timeout(1000)
+                        await page.screenshot(path="after_close_warning.png")
+                        logger.info("Screenshot saved: after_close_warning.png")
                         logger.info("Closed content warning, clicking post again...")
                         await click_post_button(page)
                         await handle_post_confirmation(page)
