@@ -90,21 +90,56 @@ async def dismiss_popups(page):
             pass
 
 
+async def wait_for_content_check(page, max_minutes: int = 15):
+    """Poll until 'Checking in progress' is gone, up to max_minutes."""
+    checking_texts = [
+        "Checking in progress",
+        "Checking in uitvoering",  # Dutch
+    ]
+    max_iterations = max_minutes * 6  # check every 10 seconds
+    for i in range(max_iterations):
+        still_checking = False
+        for text in checking_texts:
+            try:
+                visible = await page.locator(f'text="{text}"').is_visible(timeout=2000)
+                if visible:
+                    still_checking = True
+                    break
+            except Exception:
+                pass
+        if not still_checking:
+            logger.info(f"Content check done after ~{i * 10} seconds")
+            return
+        elapsed = i * 10
+        logger.info(f"Content check still running... ({elapsed}s elapsed)")
+        await dismiss_popups(page)
+        await page.wait_for_timeout(10000)
+    logger.info(f"Content check timed out after {max_minutes} minutes, proceeding anyway")
+
+
 async def click_post_button(page) -> bool:
     """Try to click the Post/Plaatsen button."""
     all_frames = [page] + list(page.frames)
 
-    # Scroll every frame to the bottom so the button renders
+    # Press End key to scroll to bottom of page/focused frame
+    await page.keyboard.press("End")
+    await page.wait_for_timeout(500)
+    await page.keyboard.press("End")
+    await page.wait_for_timeout(500)
+
+    # Scroll every frame aggressively to the bottom
     for frame in all_frames:
         try:
-            await frame.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await frame.evaluate("window.scrollTo(0, 99999)")
             await page.wait_for_timeout(300)
-            await frame.evaluate("window.scrollBy(0, 1000)")
+            await frame.evaluate("window.scrollBy(0, 5000)")
             await page.wait_for_timeout(300)
-            await frame.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await frame.evaluate("window.scrollTo(0, 99999)")
+            await page.wait_for_timeout(300)
         except Exception:
             pass
     await page.wait_for_timeout(1000)
+    await page.screenshot(path="scrolled_down.png")
 
     post_selectors = [
         'button:has-text("Plaatsen")',
@@ -160,7 +195,6 @@ async def click_post_button(page) -> bool:
         await page.mouse.click(1100, 760)
         logger.info("Clicked via coordinates (1100, 760)")
         await page.wait_for_timeout(1000)
-        # Take a screenshot to verify what was clicked
         await page.screenshot(path="coord_click.png")
         return True
     except Exception as e:
@@ -275,6 +309,9 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 await dismiss_popups(page)
                 await page.wait_for_timeout(5000)
             logger.info("Content check wait done!")
+
+            # Extra: poll until TikTok's own "Checking in progress" banner is gone
+            await wait_for_content_check(page, max_minutes=15)
 
             await page.wait_for_timeout(1000)
             await page.screenshot(path="before_post.png")
