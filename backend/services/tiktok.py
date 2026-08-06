@@ -77,6 +77,19 @@ async def get_account_info(cookies: list) -> dict:
     raise Exception("Could not verify TikTok session - please re-export your cookies and try again")
 
 
+async def dismiss_popups(page):
+    """Dismiss any visible popups."""
+    for btn_text in ["Got it", "Turn on", "Skip", "Close"]:
+        try:
+            btn = page.get_by_role("button", name=btn_text)
+            if await btn.is_visible(timeout=500):
+                await btn.click()
+                logger.info(f"Dismissed popup: {btn_text}")
+                await page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+
 async def click_post_button(page) -> bool:
     """Try to click the Post/Plaatsen button."""
     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
@@ -173,17 +186,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             await page.wait_for_timeout(30000)
             await page.screenshot(path="after_upload.png")
 
-            # Handle initial popups
-            for btn_text in ["Turn on", "Got it", "Skip", "Close"]:
-                try:
-                    btn = page.get_by_role("button", name=btn_text)
-                    if await btn.is_visible(timeout=2000):
-                        await btn.click()
-                        await page.wait_for_timeout(1000)
-                        logger.info(f"Clicked popup: {btn_text}")
-                except Exception:
-                    pass
-
             # Caption
             caption_selectors = [
                 '.public-DraftEditor-content',
@@ -204,9 +206,11 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                     except Exception:
                         pass
 
-            # Wait for content check to complete (3 minutes)
+            # Wait for content check (3 minutes) while continuously dismissing popups
             logger.info("Waiting 3 minutes for content check...")
-            await page.wait_for_timeout(180000)
+            for _ in range(36):  # 36 x 5 seconds = 3 minutes
+                await dismiss_popups(page)
+                await page.wait_for_timeout(5000)
             logger.info("Content check wait done!")
 
             await page.wait_for_timeout(1000)
@@ -231,13 +235,11 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 try:
                     if await page.locator(text).is_visible(timeout=2000):
                         logger.info("Content warning popup detected, closing...")
-                        # Try multiple close button selectors
                         close_btn = page.locator('svg[class*="close"], button[class*="close"], [data-e2e="modal-close-button"]').first
                         try:
                             await close_btn.click(timeout=2000)
                         except Exception:
                             try:
-                                # Try clicking the X by traversing up from the title
                                 await page.locator('text="Content kan worden beperkt"').locator('..').locator('..').locator('button').first.click()
                             except Exception:
                                 await page.keyboard.press("Escape")
