@@ -183,10 +183,13 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 else:
                     raise Exception("Could not find file input on any frame")
 
-            await page.wait_for_timeout(30000)
+            # Wait for video to upload while dismissing popups
+            for _ in range(6):  # 6 x 5 seconds = 30 seconds
+                await dismiss_popups(page)
+                await page.wait_for_timeout(5000)
             await page.screenshot(path="after_upload.png")
 
-            # Dismiss any popups that appeared during upload
+            # Dismiss any remaining popups
             await dismiss_popups(page)
             await page.wait_for_timeout(1000)
             await dismiss_popups(page)
