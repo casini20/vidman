@@ -121,21 +121,24 @@ async def click_post_button(page) -> bool:
     """Try to click the Post/Plaatsen button."""
     all_frames = [page] + list(page.frames)
 
-    # Press End key to scroll to bottom of page/focused frame
-    await page.keyboard.press("End")
-    await page.wait_for_timeout(500)
-    await page.keyboard.press("End")
-    await page.wait_for_timeout(500)
-
-    # Scroll every frame aggressively to the bottom
+    # Scroll every frame - target both window and any scrollable container divs
     for frame in all_frames:
         try:
-            await frame.evaluate("window.scrollTo(0, 99999)")
-            await page.wait_for_timeout(300)
-            await frame.evaluate("window.scrollBy(0, 5000)")
-            await page.wait_for_timeout(300)
-            await frame.evaluate("window.scrollTo(0, 99999)")
-            await page.wait_for_timeout(300)
+            await frame.evaluate("""
+                () => {
+                    // scroll window
+                    window.scrollTo(0, 99999);
+                    document.documentElement.scrollTop = 99999;
+                    document.body.scrollTop = 99999;
+                    // find and scroll the tallest scrollable div (TikTok wraps form in one)
+                    const divs = Array.from(document.querySelectorAll('div'));
+                    divs.sort((a, b) => b.scrollHeight - a.scrollHeight);
+                    for (const div of divs.slice(0, 5)) {
+                        div.scrollTop = 99999;
+                    }
+                }
+            """)
+            await page.wait_for_timeout(500)
         except Exception:
             pass
     await page.wait_for_timeout(1000)
