@@ -74,7 +74,7 @@ async def get_account_info(cookies: list) -> dict:
         except Exception as e:
             logger.error(f"Failed to parse passport API: {e}")
 
-    raise Exception("Could not verify TikTok session — please re-export your cookies and try again")
+    raise Exception("Could not verify TikTok session - please re-export your cookies and try again")
 
 
 async def post_video(cookies: list, video_path: str, caption: str) -> dict:
@@ -102,7 +102,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             await context.add_cookies(normalize_cookies(cookies))
             page = await context.new_page()
 
-            # Try the upload page
             await page.goto(
                 "https://www.tiktok.com/upload",
                 wait_until="domcontentloaded",
@@ -112,17 +111,14 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             logger.info(f"Upload page URL: {page.url}")
             logger.info(f"Upload page title: {await page.title()}")
 
-            # Take screenshot for debugging
             await page.screenshot(path="upload_page.png")
             logger.info("Screenshot saved to upload_page.png")
 
-            # Log all frames
             frames = page.frames
             logger.info(f"Number of frames: {len(frames)}")
             for i, frame in enumerate(frames):
                 logger.info(f"Frame {i}: {frame.url}")
 
-            # Try finding file input anywhere on the page
             file_input = page.locator('input[type="file"]')
             count = await file_input.count()
             logger.info(f"File inputs found directly: {count}")
@@ -131,7 +127,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 await file_input.first.set_input_files(video_path)
                 logger.info("File set via direct input!")
             else:
-                # Try each frame
                 for i, frame in enumerate(frames):
                     try:
                         inputs = await frame.query_selector_all('input[type="file"]')
@@ -146,10 +141,9 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                     raise Exception("Could not find file input on any frame")
 
             await page.wait_for_timeout(30000)
-await page.screenshot(path="after_upload.png")
-logger.info("Screenshot saved to after_upload.png")
+            await page.screenshot(path="after_upload.png")
+            logger.info("Screenshot saved to after_upload.png")
 
-            # Caption
             caption_selectors = [
                 '.public-DraftEditor-content',
                 '[contenteditable="true"]',
@@ -171,7 +165,6 @@ logger.info("Screenshot saved to after_upload.png")
 
             await page.wait_for_timeout(1000)
 
-            # Post button
             post_selectors = [
                 'button[data-e2e="post-btn"]',
                 'button:has-text("Post")',
