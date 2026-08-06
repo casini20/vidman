@@ -92,25 +92,80 @@ async def dismiss_popups(page):
 
 async def click_post_button(page) -> bool:
     """Try to click the Post/Plaatsen button."""
-    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    all_frames = [page] + list(page.frames)
+
+    # Scroll every frame to the bottom so the button renders
+    for frame in all_frames:
+        try:
+            await frame.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await page.wait_for_timeout(300)
+            await frame.evaluate("window.scrollBy(0, 1000)")
+            await page.wait_for_timeout(300)
+            await frame.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            pass
     await page.wait_for_timeout(1000)
+
     post_selectors = [
         'button:has-text("Plaatsen")',
         'button:has-text("Post")',
         'button[data-e2e="post-btn"]',
         '[class*="post-btn"]',
         'div[class*="btn-post"]',
+        'button[class*="submit"]',
+        'div[class*="submit"]',
+        'button[class*="publish"]',
+        'div[class*="publish"]',
     ]
     for sel in post_selectors:
-        for frame in [page] + list(page.frames):
+        for frame in all_frames:
             try:
                 btn = frame.locator(sel).first if hasattr(frame, 'locator') else None
                 if btn and await btn.is_enabled(timeout=2000):
+                    await btn.scroll_into_view_if_needed(timeout=2000)
+                    await page.wait_for_timeout(300)
                     await btn.click()
                     logger.info(f"Clicked post button via {sel}")
                     return True
             except Exception:
                 pass
+
+    # JS fallback: scan all frames for a matching button by text
+    for frame in all_frames:
+        try:
+            clicked = await frame.evaluate("""
+                () => {
+                    const texts = ['plaatsen', 'post', 'publish', 'submit'];
+                    const buttons = Array.from(document.querySelectorAll('button, div[role="button"]'));
+                    for (const btn of buttons) {
+                        const t = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+                        if (texts.includes(t) && !btn.disabled) {
+                            btn.scrollIntoView({behavior: 'smooth', block: 'center'});
+                            btn.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            """)
+            if clicked:
+                logger.info(f"Clicked post button via JS fallback on frame: {frame.url}")
+                return True
+        except Exception as e:
+            logger.info(f"JS fallback error on frame: {e}")
+
+    # Last resort: click approximate bottom-right coordinates where Post button lives
+    logger.info("Trying coordinate-based click at bottom-right...")
+    try:
+        await page.mouse.click(1100, 760)
+        logger.info("Clicked via coordinates (1100, 760)")
+        await page.wait_for_timeout(1000)
+        # Take a screenshot to verify what was clicked
+        await page.screenshot(path="coord_click.png")
+        return True
+    except Exception as e:
+        logger.info(f"Coordinate click failed: {e}")
+
     return False
 
 
