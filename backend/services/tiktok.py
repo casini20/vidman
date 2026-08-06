@@ -186,6 +186,11 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             await page.wait_for_timeout(30000)
             await page.screenshot(path="after_upload.png")
 
+            # Dismiss any popups that appeared during upload
+            await dismiss_popups(page)
+            await page.wait_for_timeout(1000)
+            await dismiss_popups(page)
+
             # Caption
             caption_selectors = [
                 '.public-DraftEditor-content',
