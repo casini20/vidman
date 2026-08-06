@@ -145,7 +145,9 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 else:
                     raise Exception("Could not find file input on any frame")
 
-            await page.wait_for_timeout(15000)
+            await page.wait_for_timeout(30000)
+await page.screenshot(path="after_upload.png")
+logger.info("Screenshot saved to after_upload.png")
 
             # Caption
             caption_selectors = [
