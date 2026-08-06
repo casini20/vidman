@@ -126,11 +126,9 @@ async def click_post_button(page) -> bool:
         try:
             await frame.evaluate("""
                 () => {
-                    // scroll window
                     window.scrollTo(0, 99999);
                     document.documentElement.scrollTop = 99999;
                     document.body.scrollTop = 99999;
-                    // find and scroll the tallest scrollable div (TikTok wraps form in one)
                     const divs = Array.from(document.querySelectorAll('div'));
                     divs.sort((a, b) => b.scrollHeight - a.scrollHeight);
                     for (const div of divs.slice(0, 5)) {
@@ -144,6 +142,17 @@ async def click_post_button(page) -> bool:
     await page.wait_for_timeout(1000)
     await page.screenshot(path="scrolled_down.png")
 
+    # Coordinate click first — we know exactly where the Post button is
+    try:
+        await page.mouse.click(213, 699)
+        logger.info("Clicked Post button via coordinates (213, 699)")
+        await page.wait_for_timeout(1000)
+        await page.screenshot(path="after_coord_click.png")
+        return True
+    except Exception as e:
+        logger.info(f"Coordinate click failed: {e}")
+
+    # Selector fallback
     post_selectors = [
         'button:has-text("Plaatsen")',
         'button:has-text("Post")',
@@ -189,17 +198,6 @@ async def click_post_button(page) -> bool:
                 return True
         except Exception as e:
             logger.info(f"JS fallback error on frame: {e}")
-
-    # Last resort: click approximate bottom-right coordinates where Post button lives
-    logger.info("Trying coordinate-based click at bottom-right...")
-    try:
-        await page.mouse.click(213, 699)
-        logger.info("Clicked via coordinates (213, 699)")
-        await page.wait_for_timeout(1000)
-        await page.screenshot(path="coord_click.png")
-        return True
-    except Exception as e:
-        logger.info(f"Coordinate click failed: {e}")
 
     return False
 
