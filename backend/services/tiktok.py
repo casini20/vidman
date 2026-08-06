@@ -101,6 +101,20 @@ async def click_post_button(page) -> bool:
     return False
 
 
+async def handle_post_confirmation(page):
+    """Handle the 'Post now' confirmation popup."""
+    await page.wait_for_timeout(2000)
+    for btn_text in ["Nu plaatsen", "Post now", "Confirm", "Continue"]:
+        try:
+            btn = page.get_by_role("button", name=btn_text)
+            if await btn.is_visible(timeout=3000):
+                await btn.click()
+                logger.info(f"Clicked confirmation: {btn_text}")
+                return
+        except Exception:
+            pass
+
+
 async def post_video(cookies: list, video_path: str, caption: str) -> dict:
     from playwright.async_api import async_playwright
 
@@ -225,19 +239,10 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 await page.screenshot(path="post_failed.png")
                 raise Exception("Could not find or click the Post button")
 
-            # Handle "Post now" confirmation popup (Dutch/English)
-            await page.wait_for_timeout(2000)
-            for btn_text in ["Nu plaatsen", "Post now", "Confirm", "Continue"]:
-                try:
-                    btn = page.get_by_role("button", name=btn_text)
-                    if await btn.is_visible(timeout=3000):
-                        await btn.click()
-                        logger.info(f"Clicked confirmation: {btn_text}")
-                        break
-                except Exception:
-                    pass
+            # Handle "Post now" confirmation popup
+            await handle_post_confirmation(page)
 
-            # Handle "Content may be limited" warning popup - close it and post anyway
+            # Handle "Content may be limited" warning popup
             await page.wait_for_timeout(2000)
             warning_texts = [
                 'text="Content kan worden beperkt"',
@@ -247,27 +252,20 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 try:
                     if await page.locator(text).is_visible(timeout=2000):
                         logger.info("Content warning popup detected, closing...")
-                        # Click the X button to close
-                        close_btn = page.locator('button[aria-label="Close"], button:has-text("×"), [class*="close"]').first
+                        # Try multiple close button selectors
+                        close_btn = page.locator('svg[class*="close"], button[class*="close"], [data-e2e="modal-close-button"]').first
                         try:
                             await close_btn.click(timeout=2000)
                         except Exception:
-                            # Try pressing Escape
-                            await page.keyboard.press("Escape")
-                        await page.wait_for_timeout(1000)
-                        # Click post again
-                        await click_post_button(page)
-                        # Handle "Post now" popup again
-                        await page.wait_for_timeout(2000)
-                        for btn_text in ["Nu plaatsen", "Post now", "Confirm"]:
                             try:
-                                btn = page.get_by_role("button", name=btn_text)
-                                if await btn.is_visible(timeout=3000):
-                                    await btn.click()
-                                    logger.info(f"Clicked post confirmation: {btn_text}")
-                                    break
+                                # Try clicking the X by traversing up from the title
+                                await page.locator('text="Content kan worden beperkt"').locator('..').locator('..').locator('button').first.click()
                             except Exception:
-                                pass
+                                await page.keyboard.press("Escape")
+                        await page.wait_for_timeout(1000)
+                        logger.info("Closed content warning, clicking post again...")
+                        await click_post_button(page)
+                        await handle_post_confirmation(page)
                         break
                 except Exception:
                     pass
