@@ -204,31 +204,10 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                     except Exception:
                         pass
 
-            # Wait for content check to complete (up to 15 minutes)
-            logger.info("Waiting for content check...")
-            for _ in range(90):
-                try:
-                    done_texts = [
-                        'text="Controle voltooid"',
-                        'text="Check complete"',
-                        'text="No issues found"',
-                        'text="Geen problemen gevonden"',
-                        'text="Enkele mogelijke schendingen gevonden"',
-                    ]
-                    check_done = False
-                    for text in done_texts:
-                        try:
-                            if await page.locator(text).is_visible(timeout=1000):
-                                check_done = True
-                                logger.info(f"Content check done: {text}")
-                                break
-                        except Exception:
-                            pass
-                    if check_done:
-                        break
-                except Exception:
-                    pass
-                await page.wait_for_timeout(10000)
+            # Wait for content check to complete (3 minutes)
+            logger.info("Waiting 3 minutes for content check...")
+            await page.wait_for_timeout(180000)
+            logger.info("Content check wait done!")
 
             await page.wait_for_timeout(1000)
             await page.screenshot(path="before_post.png")
