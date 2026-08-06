@@ -56,16 +56,12 @@ async def get_account_info(cookies: list) -> dict:
             headers=headers,
             timeout=30,
         )
-        logger.error(f"Passport API status: {resp.status_code}")
-        logger.error(f"Passport API response: {resp.text[:500]}")
-
         try:
             data = resp.json()
             user_data = data.get("data", {})
             username = user_data.get("username") or user_data.get("unique_id")
             display_name = user_data.get("nickname", username)
             avatar_url = user_data.get("avatar_url", "")
-
             if username:
                 return {
                     "username": username,
@@ -91,6 +87,7 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
             ]
         )
         context = await browser.new_context(
@@ -105,38 +102,52 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             await context.add_cookies(normalize_cookies(cookies))
             page = await context.new_page()
 
+            # Try the upload page
             await page.goto(
-                "https://www.tiktok.com/creator-center/upload",
-                wait_until="domcontentloaded",
+                "https://www.tiktok.com/upload",
+                wait_until="networkidle",
                 timeout=60000,
             )
-            await page.wait_for_timeout(10000)
+            await page.wait_for_timeout(5000)
             logger.info(f"Upload page URL: {page.url}")
+            logger.info(f"Upload page title: {await page.title()}")
 
-            # Try direct file input first
-            file_set = False
-            try:
-                file_input = page.locator('input[type="file"]').first
-                await file_input.wait_for(timeout=10000)
-                await file_input.set_input_files(video_path)
-                file_set = True
-                logger.info("File set via direct input")
-            except Exception:
-                pass
+            # Take screenshot for debugging
+            await page.screenshot(path="upload_page.png")
+            logger.info("Screenshot saved to upload_page.png")
 
-            if not file_set:
-                try:
-                    iframe_locator = page.frame_locator("iframe").first
-                    file_input = iframe_locator.locator('input[type="file"]')
-                    await file_input.wait_for(timeout=30000)
-                    await file_input.set_input_files(video_path)
-                    file_set = True
-                    logger.info("File set via iframe input")
-                except Exception as e:
-                    raise Exception(f"Could not find file input: {e}")
+            # Log all frames
+            frames = page.frames
+            logger.info(f"Number of frames: {len(frames)}")
+            for i, frame in enumerate(frames):
+                logger.info(f"Frame {i}: {frame.url}")
+
+            # Try finding file input anywhere on the page
+            file_input = page.locator('input[type="file"]')
+            count = await file_input.count()
+            logger.info(f"File inputs found directly: {count}")
+
+            if count > 0:
+                await file_input.first.set_input_files(video_path)
+                logger.info("File set via direct input!")
+            else:
+                # Try each frame
+                for i, frame in enumerate(frames):
+                    try:
+                        inputs = await frame.query_selector_all('input[type="file"]')
+                        logger.info(f"Frame {i} has {len(inputs)} file inputs")
+                        if inputs:
+                            await inputs[0].set_input_files(video_path)
+                            logger.info(f"File set via frame {i}!")
+                            break
+                    except Exception as e:
+                        logger.info(f"Frame {i} error: {e}")
+                else:
+                    raise Exception("Could not find file input on any frame")
 
             await page.wait_for_timeout(15000)
 
+            # Caption
             caption_selectors = [
                 '.public-DraftEditor-content',
                 '[contenteditable="true"]',
@@ -144,31 +155,35 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                 '.notranslate[contenteditable]',
             ]
             for sel in caption_selectors:
-                for locator in [page.locator(sel).first, page.frame_locator("iframe").first.locator(sel).first]:
+                for frame in [page] + list(page.frames):
                     try:
-                        if await locator.is_visible(timeout=3000):
-                            await locator.click()
-                            await locator.press("Control+a")
-                            await locator.type(caption, delay=30)
+                        el = frame.locator(sel).first if hasattr(frame, 'locator') else None
+                        if el and await el.is_visible(timeout=2000):
+                            await el.click()
+                            await el.press("Control+a")
+                            await el.type(caption, delay=30)
+                            logger.info(f"Caption added via {sel}")
                             break
                     except Exception:
                         pass
 
             await page.wait_for_timeout(1000)
 
+            # Post button
             post_selectors = [
                 'button[data-e2e="post-btn"]',
                 'button:has-text("Post")',
                 '[class*="post-btn"]',
-                'button.btn-post',
             ]
             posted = False
             for sel in post_selectors:
-                for locator in [page.locator(sel).first, page.frame_locator("iframe").first.locator(sel).first]:
+                for frame in [page] + list(page.frames):
                     try:
-                        if await locator.is_enabled(timeout=3000):
-                            await locator.click()
+                        btn = frame.locator(sel).first if hasattr(frame, 'locator') else None
+                        if btn and await btn.is_enabled(timeout=2000):
+                            await btn.click()
                             posted = True
+                            logger.info(f"Posted via {sel}")
                             break
                     except Exception:
                         pass
