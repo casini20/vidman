@@ -112,7 +112,6 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             logger.info(f"Upload page title: {await page.title()}")
 
             await page.screenshot(path="upload_page.png")
-            logger.info("Screenshot saved to upload_page.png")
 
             frames = page.frames
             logger.info(f"Number of frames: {len(frames)}")
@@ -144,6 +143,18 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             await page.screenshot(path="after_upload.png")
             logger.info("Screenshot saved to after_upload.png")
 
+            # Handle popups - Turn on content checks and dismiss Got it
+            for btn_text in ["Turn on", "Got it", "Skip", "Close"]:
+                try:
+                    btn = page.get_by_role("button", name=btn_text)
+                    if await btn.is_visible(timeout=2000):
+                        await btn.click()
+                        await page.wait_for_timeout(1000)
+                        logger.info(f"Clicked popup button: {btn_text}")
+                except Exception:
+                    pass
+
+            # Caption
             caption_selectors = [
                 '.public-DraftEditor-content',
                 '[contenteditable="true"]',
@@ -164,11 +175,16 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                         pass
 
             await page.wait_for_timeout(1000)
+            await page.screenshot(path="before_post.png")
+            logger.info("Screenshot saved to before_post.png")
 
+            # Post button
             post_selectors = [
                 'button[data-e2e="post-btn"]',
                 'button:has-text("Post")',
+                'button:has-text("Plaatsen")',
                 '[class*="post-btn"]',
+                'div[class*="btn-post"]',
             ]
             posted = False
             for sel in post_selectors:
@@ -186,6 +202,7 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                     break
 
             if not posted:
+                await page.screenshot(path="post_failed.png")
                 raise Exception("Could not find or click the Post button")
 
             await page.wait_for_timeout(6000)
