@@ -105,7 +105,7 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             # Try the upload page
             await page.goto(
                 "https://www.tiktok.com/upload",
-                wait_until="networkidle",
+                wait_until="domcontentloaded",
                 timeout=60000,
             )
             await page.wait_for_timeout(5000)
