@@ -160,8 +160,6 @@ async def click_post_button(page) -> bool:
             try:
                 btn = frame.locator(sel).first if hasattr(frame, 'locator') else None
                 if btn and await btn.is_enabled(timeout=2000):
-                    await btn.scroll_into_view_if_needed(timeout=2000)
-                    await page.wait_for_timeout(300)
                     await btn.click()
                     logger.info(f"Clicked post button via {sel}")
                     return True
@@ -195,8 +193,8 @@ async def click_post_button(page) -> bool:
     # Last resort: click approximate bottom-right coordinates where Post button lives
     logger.info("Trying coordinate-based click at bottom-right...")
     try:
-        await page.mouse.click(1100, 760)
-        logger.info("Clicked via coordinates (1100, 760)")
+        await page.mouse.click(213, 699)
+        logger.info("Clicked via coordinates (213, 699)")
         await page.wait_for_timeout(1000)
         await page.screenshot(path="coord_click.png")
         return True
