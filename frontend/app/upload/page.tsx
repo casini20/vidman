@@ -11,7 +11,7 @@ type PostResult = {
   accounts: { username: string; status: string; error_message?: string }[];
 };
 
-const GROQ_API_KEY = "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";
+const GROQ_API_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY ?? "";
 
 export default function UploadPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
