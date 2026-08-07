@@ -22,6 +22,7 @@ async def init_db():
                 followers TEXT DEFAULT '0',
                 following TEXT DEFAULT '0',
                 likes TEXT DEFAULT '0',
+                views TEXT DEFAULT '0',
                 last_synced TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             )
@@ -52,4 +53,10 @@ async def init_db():
                 FOREIGN KEY (account_id) REFERENCES accounts(id)
             )
         """)
+        # Migration: add views column if not present
+        try:
+            await db.execute("ALTER TABLE accounts ADD COLUMN views TEXT DEFAULT '0'")
+            await db.commit()
+        except Exception:
+            pass
         await db.commit()

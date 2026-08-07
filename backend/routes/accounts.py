@@ -22,7 +22,7 @@ async def list_accounts():
     async with get_db() as db:
         cursor = await db.execute(
             "SELECT id, username, display_name, avatar_url, "
-            "followers, following, likes, last_synced, created_at FROM accounts"
+            "followers, following, likes, views, last_synced, created_at FROM accounts"
         )
         rows = await cursor.fetchall()
         return [row_to_dict(r) for r in rows]
@@ -60,7 +60,7 @@ async def add_account(request: AddAccountRequest):
             await db.execute(
                 """UPDATE accounts
                    SET cookies=?, display_name=?, avatar_url=?,
-                       followers=?, following=?, likes=?, last_synced=?
+                       followers=?, following=?, likes=?, views=?, last_synced=?
                    WHERE username=?""",
                 (
                     cookies_str,
@@ -69,6 +69,7 @@ async def add_account(request: AddAccountRequest):
                     info["followers"],
                     info["following"],
                     info["likes"],
+                    info.get("views", "0"),
                     now,
                     info["username"],
                 ),
@@ -79,8 +80,8 @@ async def add_account(request: AddAccountRequest):
         account_id = str(uuid.uuid4())
         await db.execute(
             """INSERT INTO accounts
-               (id, username, display_name, avatar_url, cookies, followers, following, likes, last_synced)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+               (id, username, display_name, avatar_url, cookies, followers, following, likes, views, last_synced)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (
                 account_id,
                 info["username"],
@@ -90,6 +91,7 @@ async def add_account(request: AddAccountRequest):
                 info["followers"],
                 info["following"],
                 info["likes"],
+                info.get("views", "0"),
                 now,
             ),
         )
@@ -131,12 +133,13 @@ async def sync_stats(account_id: str):
     async with get_db() as db:
         await db.execute(
             """UPDATE accounts
-               SET followers=?, following=?, likes=?, display_name=?, avatar_url=?, last_synced=?
+               SET followers=?, following=?, likes=?, views=?, display_name=?, avatar_url=?, last_synced=?
                WHERE id=?""",
             (
                 info["followers"],
                 info["following"],
                 info["likes"],
+                info.get("views", "0"),
                 info["display_name"],
                 info["avatar_url"],
                 now,

@@ -63,13 +63,18 @@ async def get_account_info(cookies: list) -> dict:
             display_name = user_data.get("nickname", username)
             avatar_url = user_data.get("avatar_url", "")
             if username:
+                followers = str(user_data.get("follower_count", 0))
+                following = str(user_data.get("following_count", 0))
+                likes = str(user_data.get("total_favorited", 0))
+                views = str(user_data.get("total_play", user_data.get("video_views", 0)))
                 return {
                     "username": username,
                     "display_name": display_name or username,
                     "avatar_url": avatar_url,
-                    "followers": "0",
-                    "following": "0",
-                    "likes": "0",
+                    "followers": followers,
+                    "following": following,
+                    "likes": likes,
+                    "views": views,
                 }
         except Exception as e:
             logger.error(f"Failed to parse passport API: {e}")
@@ -91,25 +96,39 @@ async def dismiss_popups(page):
 
 
 async def wait_for_content_check(page, max_minutes: int = 15):
-    """Poll until 'Checking in progress' is gone, up to max_minutes."""
+    """Poll until content check is done, up to max_minutes.
+    Done = 'Checking in progress' text gone OR Post button is enabled.
+    """
     checking_texts = [
         "Checking in progress",
         "Checking in uitvoering",  # Dutch
+        "Checking in",  # partial match fallback
     ]
     max_iterations = max_minutes * 6  # check every 10 seconds
     for i in range(max_iterations):
+        # Done signal 1: Post button is enabled
+        try:
+            post_btn = page.locator('button:has-text("Post"), button:has-text("Plaatsen")').first
+            if await post_btn.is_enabled(timeout=1000):
+                logger.info(f"Content check done — Post button enabled after ~{i * 10}s")
+                return
+        except Exception:
+            pass
+
+        # Done signal 2: none of the "checking" strings visible
         still_checking = False
         for text in checking_texts:
             try:
-                visible = await page.locator(f'text="{text}"').is_visible(timeout=2000)
+                visible = await page.locator(f'text="{text}"').is_visible(timeout=1000)
                 if visible:
                     still_checking = True
                     break
             except Exception:
                 pass
         if not still_checking:
-            logger.info(f"Content check done after ~{i * 10} seconds")
+            logger.info(f"Content check done — checking text gone after ~{i * 10}s")
             return
+
         elapsed = i * 10
         logger.info(f"Content check still running... ({elapsed}s elapsed)")
         await dismiss_popups(page)
@@ -302,14 +321,10 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                     except Exception:
                         pass
 
-            # Wait for content check (3 minutes) while continuously dismissing popups
-            logger.info("Waiting 3 minutes for content check...")
-            for _ in range(36):  # 36 x 5 seconds = 3 minutes
-                await dismiss_popups(page)
-                await page.wait_for_timeout(5000)
-            logger.info("Content check wait done!")
-
-            # Extra: poll until TikTok's own "Checking in progress" banner is gone
+            # Short stabilisation wait, then poll until content check is done
+            logger.info("Waiting for content check to complete...")
+            await dismiss_popups(page)
+            await page.wait_for_timeout(10000)
             await wait_for_content_check(page, max_minutes=15)
 
             await page.wait_for_timeout(1000)

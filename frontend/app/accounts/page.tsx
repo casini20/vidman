@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { api, Account } from "@/lib/api";
 import {
-  Plus, Trash2, RefreshCw, Users, Heart, UserCheck, X, ChevronDown, ChevronUp
+  Plus, Trash2, RefreshCw, Users, Heart, UserCheck, Eye, X, ChevronDown, ChevronUp
 } from "lucide-react";
 
 export default function AccountsPage() {
@@ -178,6 +178,10 @@ export default function AccountsPage() {
                 <div className="flex items-center gap-1.5 text-muted">
                   <Heart size={13} />
                   <span className="font-mono text-xs">{acc.likes}</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-muted">
+                  <Eye size={13} />
+                  <span className="font-mono text-xs">{acc.views ?? "0"}</span>
                 </div>
               </div>
 

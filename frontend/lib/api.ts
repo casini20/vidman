@@ -17,6 +17,7 @@ export interface Account {
   followers: string;
   following: string;
   likes: string;
+  views?: string;
   last_synced?: string;
   created_at: string;
 }
