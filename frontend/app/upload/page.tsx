@@ -11,7 +11,7 @@ type PostResult = {
   accounts: { username: string; status: string; error_message?: string }[];
 };
 
-const GROQ_API_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY ?? "";
+const GROQ_API_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY || "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";
 
 export default function UploadPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -62,6 +62,7 @@ export default function UploadPage() {
 
   const generateCaption = async () => {
     if (!topic.trim()) return;
+    console.log("API Key present:", !!GROQ_API_KEY);
     setGenerating(true);
     try {
       const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -87,10 +88,16 @@ export default function UploadPage() {
         }),
       });
       const data = await res.json();
+      console.log("Groq response:", JSON.stringify(data));
+      if (data.error) {
+        alert("Groq error: " + data.error.message);
+        return;
+      }
       const generated = data.choices?.[0]?.message?.content?.trim();
       if (generated) setCaption(generated);
-    } catch (e) {
+    } catch (e: any) {
       console.error("Groq error:", e);
+      alert("Error: " + e.message);
     } finally {
       setGenerating(false);
     }
