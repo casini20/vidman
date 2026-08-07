@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { api, Account, Post } from "@/lib/api";
 import {
-  Upload, Film, CheckSquare, Square, X, Loader2, CheckCircle, XCircle
+  Upload, Film, CheckSquare, Square, X, Loader2, CheckCircle, XCircle, Sparkles
 } from "lucide-react";
 
 type PostResult = {
@@ -12,8 +11,9 @@ type PostResult = {
   accounts: { username: string; status: string; error_message?: string }[];
 };
 
+const GROQ_API_KEY = "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";
+
 export default function UploadPage() {
-  const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -21,6 +21,8 @@ export default function UploadPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [file, setFile] = useState<File | null>(null);
   const [caption, setCaption] = useState("");
+  const [topic, setTopic] = useState("");
+  const [generating, setGenerating] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [posting, setPosting] = useState(false);
   const [result, setResult] = useState<PostResult | null>(null);
@@ -29,7 +31,6 @@ export default function UploadPage() {
   useEffect(() => {
     api.accounts.list().then((accs) => {
       setAccounts(accs);
-      // Select all by default
       setSelectedIds(new Set(accs.map((a) => a.id)));
     });
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
@@ -57,6 +58,42 @@ export default function UploadPage() {
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (f) setFile(f);
+  };
+
+  const generateCaption = async () => {
+    if (!topic.trim()) return;
+    setGenerating(true);
+    try {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: "llama3-8b-8192",
+          messages: [
+            {
+              role: "system",
+              content: "You are a TikTok caption writer. Write short, punchy captions with relevant hashtags. Max 150 characters before hashtags. Include 5-8 trending hashtags. Return ONLY the caption text, nothing else.",
+            },
+            {
+              role: "user",
+              content: `Write a TikTok caption for a video about: ${topic}`,
+            },
+          ],
+          max_tokens: 200,
+          temperature: 0.9,
+        }),
+      });
+      const data = await res.json();
+      const generated = data.choices?.[0]?.message?.content?.trim();
+      if (generated) setCaption(generated);
+    } catch (e) {
+      console.error("Groq error:", e);
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const pollPostStatus = (post_id: string) => {
@@ -104,12 +141,12 @@ export default function UploadPage() {
   const reset = () => {
     setFile(null);
     setCaption("");
+    setTopic("");
     setResult(null);
     setError("");
     setSelectedIds(new Set(accounts.map((a) => a.id)));
   };
 
-  // ── Result screen ─────────────────────────────────────────────────────────
   if (result) {
     return (
       <div className="max-w-lg mx-auto text-center py-16">
@@ -148,14 +185,11 @@ export default function UploadPage() {
     );
   }
 
-  // ── Main form ─────────────────────────────────────────────────────────────
   return (
     <div className="max-w-2xl mx-auto">
       <div className="mb-8">
         <h1 className="text-2xl font-bold">Upload video</h1>
-        <p className="text-muted text-sm mt-1">
-          Post to all selected accounts at once.
-        </p>
+        <p className="text-muted text-sm mt-1">Post to all selected accounts at once.</p>
       </div>
 
       {/* Drop zone */}
@@ -182,9 +216,7 @@ export default function UploadPage() {
           <>
             <Film size={32} className="text-red mb-3" />
             <p className="font-medium">{file.name}</p>
-            <p className="text-muted text-xs mt-1">
-              {(file.size / 1024 / 1024).toFixed(1)} MB
-            </p>
+            <p className="text-muted text-xs mt-1">{(file.size / 1024 / 1024).toFixed(1)} MB</p>
             <button
               onClick={(e) => { e.stopPropagation(); setFile(null); }}
               className="absolute top-3 right-3 text-muted hover:text-white transition"
@@ -199,6 +231,32 @@ export default function UploadPage() {
             <p className="text-muted text-xs mt-1">or click to select a file</p>
           </>
         )}
+      </div>
+
+      {/* AI Caption Generator */}
+      <div className="mb-4">
+        <label className="block text-sm font-medium mb-2">AI Caption</label>
+        <div className="flex gap-2">
+          <input
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && generateCaption()}
+            placeholder="Enter a topic or keyword..."
+            className="flex-1 bg-card border border-border rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan placeholder-muted"
+          />
+          <button
+            onClick={generateCaption}
+            disabled={!topic.trim() || generating}
+            className="flex items-center gap-2 bg-cyan bg-opacity-20 hover:bg-opacity-30 border border-cyan border-opacity-40 disabled:opacity-40 disabled:cursor-not-allowed transition text-cyan px-4 py-2.5 rounded-xl text-sm font-semibold"
+          >
+            {generating ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Sparkles size={16} />
+            )}
+            {generating ? "Generating..." : "Generate"}
+          </button>
+        </div>
       </div>
 
       {/* Caption */}
@@ -218,14 +276,9 @@ export default function UploadPage() {
         <div className="flex items-center justify-between mb-3">
           <label className="text-sm font-medium">
             Post to accounts{" "}
-            <span className="text-muted font-normal">
-              ({selectedIds.size} selected)
-            </span>
+            <span className="text-muted font-normal">({selectedIds.size} selected)</span>
           </label>
-          <button
-            onClick={toggleAll}
-            className="text-xs text-cyan hover:underline"
-          >
+          <button onClick={toggleAll} className="text-xs text-cyan hover:underline">
             {selectedIds.size === accounts.length ? "Deselect all" : "Select all"}
           </button>
         </div>
@@ -233,10 +286,7 @@ export default function UploadPage() {
         {accounts.length === 0 ? (
           <div className="bg-card border border-border rounded-xl p-5 text-center text-sm text-muted">
             No accounts connected.{" "}
-            <a href="/accounts" className="text-cyan hover:underline">
-              Add one
-            </a>
-            .
+            <a href="/accounts" className="text-cyan hover:underline">Add one</a>.
           </div>
         ) : (
           <div className="space-y-2">
@@ -248,9 +298,7 @@ export default function UploadPage() {
                   onClick={() => toggle(acc.id)}
                   className={`
                     w-full flex items-center gap-3 p-3 rounded-xl border text-left transition
-                    ${checked
-                      ? "border-red bg-red bg-opacity-5"
-                      : "border-border bg-card hover:border-muted"}
+                    ${checked ? "border-red bg-red bg-opacity-5" : "border-border bg-card hover:border-muted"}
                   `}
                 >
                   {checked ? (
@@ -269,9 +317,7 @@ export default function UploadPage() {
                     )}
                   </div>
                   <div>
-                    <p className="text-sm font-medium leading-none">
-                      @{acc.username}
-                    </p>
+                    <p className="text-sm font-medium leading-none">@{acc.username}</p>
                     {acc.display_name && (
                       <p className="text-xs text-muted mt-0.5">{acc.display_name}</p>
                     )}
@@ -289,7 +335,6 @@ export default function UploadPage() {
         </p>
       )}
 
-      {/* Submit */}
       <button
         onClick={submit}
         disabled={!file || selectedIds.size === 0 || !caption.trim() || posting}
