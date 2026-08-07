@@ -68,53 +68,35 @@ async def get_account_info(cookies: list) -> dict:
                 following = "0"
                 likes = "0"
                 views = "0"
+                # Fetch real stats using Playwright (httpx gets bot-blocked)
                 try:
-                    profile_resp = await client.get(
-                        f"https://www.tiktok.com/@{username}",
-                        headers=headers,
-                        timeout=15,
-                    )
-                    html = profile_resp.text
-                    patterns = [
-                        r'__UNIVERSAL_DATA_FOR_REHYDRATION__\s*=\s*(\{.+?\})\s*</script>',
-                        r'SIGI_STATE\s*=\s*(\{.+?\})\s*</script>',
-                        r'__NEXT_DATA__\s*=\s*(\{.+?\})\s*</script>',
-                        r'"stats"\s*:\s*(\{"followerCount".+?\})',
-                    ]
-                    matched = False
-                    for pattern in patterns:
-                        m = re.search(pattern, html, re.DOTALL)
-                        if m:
-                            try:
-                                page_data = json.loads(m.group(1))
-                                # Try multiple paths to stats
-                                u = {}
-                                for path in [
-                                    lambda d: d.get("__DEFAULT_SCOPE__", {}).get("webapp.user-detail", {}).get("userInfo", {}).get("stats", {}),
-                                    lambda d: d.get("userInfo", {}).get("stats", {}),
-                                    lambda d: d.get("props", {}).get("pageProps", {}).get("userInfo", {}).get("stats", {}),
-                                ]:
-                                    try:
-                                        u = path(page_data)
-                                        if u.get("followerCount") is not None:
-                                            break
-                                    except Exception:
-                                        pass
-                                if u.get("followerCount") is not None:
-                                    followers = str(u.get("followerCount", 0))
-                                    following = str(u.get("followingCount", 0))
-                                    likes = str(u.get("heartCount", u.get("diggCount", 0)))
-                                    views = str(u.get("videoCount", 0))
-                                    logger.info(f"Stats scraped for {username}: followers={followers} following={following} likes={likes} views={views}")
-                                    matched = True
-                                    break
-                            except Exception as parse_err:
-                                logger.warning(f"Pattern matched but parse failed: {parse_err}")
-                    if not matched:
-                        # Log script tag names to help diagnose
-                        script_vars = re.findall(r'window\[(["\'].+?["\'])\]\s*=', html)
-                        var_names = re.findall(r'var\s+(__\w+__)\s*=', html)
-                        logger.warning(f"Could not find stats JSON for {username}. script vars: {script_vars[:5]} var names: {var_names[:5]}")
+                    from playwright.async_api import async_playwright
+                    async with async_playwright() as pw:
+                        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
+                        ctx = await browser.new_context(user_agent=USER_AGENT)
+                        await ctx.add_cookies(normalize_cookies(cookies))
+                        pg = await ctx.new_page()
+                        await pg.goto(f"https://www.tiktok.com/@{username}", wait_until="domcontentloaded", timeout=30000)
+                        await pg.wait_for_timeout(3000)
+                        stats = await pg.evaluate("""
+                            () => {
+                                const data = window.__UNIVERSAL_DATA_FOR_REHYDRATION__ || window.SIGI_STATE;
+                                if (!data) return null;
+                                const scope = data.__DEFAULT_SCOPE__ || data;
+                                const userDetail = scope['webapp.user-detail'] || scope['userDetail'] || {};
+                                const stats = (userDetail.userInfo || {}).stats || {};
+                                return stats;
+                            }
+                        """)
+                        await browser.close()
+                        if stats and stats.get("followerCount") is not None:
+                            followers = str(stats.get("followerCount", 0))
+                            following = str(stats.get("followingCount", 0))
+                            likes = str(stats.get("heartCount", stats.get("diggCount", 0)))
+                            views = str(stats.get("videoCount", 0))
+                            logger.info(f"Stats scraped for {username}: followers={followers} following={following} likes={likes} views={views}")
+                        else:
+                            logger.warning(f"Stats not found in page JS for {username}, stats={stats}")
                 except Exception as e:
                     logger.warning(f"Could not fetch user stats: {e}")
                 return {
