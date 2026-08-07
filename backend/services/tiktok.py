@@ -63,25 +63,38 @@ async def get_account_info(cookies: list) -> dict:
             display_name = user_data.get("nickname", username)
             avatar_url = user_data.get("avatar_url", "")
             if username:
-                # Fetch real stats from user detail API
+                # Fetch real stats by scraping the profile page
                 followers = "0"
                 following = "0"
                 likes = "0"
                 views = "0"
                 try:
-                    stats_resp = await client.get(
-                        f"https://www.tiktok.com/api/user/detail/",
-                        params={"uniqueId": username, "msToken": "", "X-Bogus": ""},
+                    profile_resp = await client.get(
+                        f"https://www.tiktok.com/@{username}",
                         headers=headers,
                         timeout=15,
                     )
-                    stats_data = stats_resp.json()
-                    u = stats_data.get("userInfo", {}).get("stats", {})
-                    followers = str(u.get("followerCount", 0))
-                    following = str(u.get("followingCount", 0))
-                    likes = str(u.get("heartCount", u.get("diggCount", 0)))
-                    views = str(u.get("videoCount", 0))
-                    logger.info(f"Stats fetched for {username}: {u}")
+                    html = profile_resp.text
+                    match = re.search(
+                        r'__UNIVERSAL_DATA_FOR_REHYDRATION__\s*=\s*(\{.+?\})</script>',
+                        html, re.DOTALL
+                    )
+                    if match:
+                        page_data = json.loads(match.group(1))
+                        detail = (
+                            page_data
+                            .get("__DEFAULT_SCOPE__", {})
+                            .get("webapp.user-detail", {})
+                            .get("userInfo", {})
+                        )
+                        u = detail.get("stats", {})
+                        followers = str(u.get("followerCount", 0))
+                        following = str(u.get("followingCount", 0))
+                        likes = str(u.get("heartCount", u.get("diggCount", 0)))
+                        views = str(u.get("videoCount", 0))
+                        logger.info(f"Stats scraped for {username}: followers={followers} following={following} likes={likes} views={views}")
+                    else:
+                        logger.warning(f"Could not find stats JSON in profile page for {username}")
                 except Exception as e:
                     logger.warning(f"Could not fetch user stats: {e}")
                 return {
