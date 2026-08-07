@@ -75,26 +75,46 @@ async def get_account_info(cookies: list) -> dict:
                         timeout=15,
                     )
                     html = profile_resp.text
-                    match = re.search(
-                        r'__UNIVERSAL_DATA_FOR_REHYDRATION__\s*=\s*(\{.+?\})</script>',
-                        html, re.DOTALL
-                    )
-                    if match:
-                        page_data = json.loads(match.group(1))
-                        detail = (
-                            page_data
-                            .get("__DEFAULT_SCOPE__", {})
-                            .get("webapp.user-detail", {})
-                            .get("userInfo", {})
-                        )
-                        u = detail.get("stats", {})
-                        followers = str(u.get("followerCount", 0))
-                        following = str(u.get("followingCount", 0))
-                        likes = str(u.get("heartCount", u.get("diggCount", 0)))
-                        views = str(u.get("videoCount", 0))
-                        logger.info(f"Stats scraped for {username}: followers={followers} following={following} likes={likes} views={views}")
-                    else:
-                        logger.warning(f"Could not find stats JSON in profile page for {username}")
+                    patterns = [
+                        r'__UNIVERSAL_DATA_FOR_REHYDRATION__\s*=\s*(\{.+?\})\s*</script>',
+                        r'SIGI_STATE\s*=\s*(\{.+?\})\s*</script>',
+                        r'__NEXT_DATA__\s*=\s*(\{.+?\})\s*</script>',
+                        r'"stats"\s*:\s*(\{"followerCount".+?\})',
+                    ]
+                    matched = False
+                    for pattern in patterns:
+                        m = re.search(pattern, html, re.DOTALL)
+                        if m:
+                            try:
+                                page_data = json.loads(m.group(1))
+                                # Try multiple paths to stats
+                                u = {}
+                                for path in [
+                                    lambda d: d.get("__DEFAULT_SCOPE__", {}).get("webapp.user-detail", {}).get("userInfo", {}).get("stats", {}),
+                                    lambda d: d.get("userInfo", {}).get("stats", {}),
+                                    lambda d: d.get("props", {}).get("pageProps", {}).get("userInfo", {}).get("stats", {}),
+                                ]:
+                                    try:
+                                        u = path(page_data)
+                                        if u.get("followerCount") is not None:
+                                            break
+                                    except Exception:
+                                        pass
+                                if u.get("followerCount") is not None:
+                                    followers = str(u.get("followerCount", 0))
+                                    following = str(u.get("followingCount", 0))
+                                    likes = str(u.get("heartCount", u.get("diggCount", 0)))
+                                    views = str(u.get("videoCount", 0))
+                                    logger.info(f"Stats scraped for {username}: followers={followers} following={following} likes={likes} views={views}")
+                                    matched = True
+                                    break
+                            except Exception as parse_err:
+                                logger.warning(f"Pattern matched but parse failed: {parse_err}")
+                    if not matched:
+                        # Log script tag names to help diagnose
+                        script_vars = re.findall(r'window\[(["\'].+?["\'])\]\s*=', html)
+                        var_names = re.findall(r'var\s+(__\w+__)\s*=', html)
+                        logger.warning(f"Could not find stats JSON for {username}. script vars: {script_vars[:5]} var names: {var_names[:5]}")
                 except Exception as e:
                     logger.warning(f"Could not fetch user stats: {e}")
                 return {
