@@ -217,7 +217,19 @@ async def post_instagram_video(cookies: list, video_path: str, caption: str) -> 
 
             # Step 4: Share
             await click_top_right_button(["Share", "Delen", "Publish"])
-            await page.wait_for_timeout(8000)
+            logger.info("Instagram Share clicked, waiting for upload to complete...")
+
+            # Wait up to 3 minutes for the Sharing spinner to disappear
+            for _ in range(36):  # 36 x 5s = 3 minutes
+                await page.wait_for_timeout(5000)
+                try:
+                    sharing_visible = await page.locator('text="Sharing"').is_visible(timeout=1000)
+                    if not sharing_visible:
+                        logger.info("Instagram sharing complete")
+                        break
+                except Exception:
+                    break
+
             await page.screenshot(path="ig_after_share.png")
             await browser.close()
             return {"success": True}
