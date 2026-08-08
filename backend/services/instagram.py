@@ -164,6 +164,16 @@ async def post_instagram_video(cookies: list, video_path: str, caption: str) -> 
             await page.wait_for_timeout(3000)
             await page.screenshot(path="ig_after_upload.png")
 
+            # Dismiss "Video posts are now shared as reels" popup
+            try:
+                ok_btn = page.get_by_role("button", name="OK")
+                if await ok_btn.is_visible(timeout=5000):
+                    await ok_btn.click()
+                    logger.info("Dismissed reels popup")
+                    await page.wait_for_timeout(1000)
+            except Exception:
+                pass
+
             # Step 1: Bijsnijden (Crop) → click Volgende
             await page.wait_for_timeout(2000)
             for label in ["Volgende", "Next"]:
