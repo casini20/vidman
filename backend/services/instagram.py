@@ -51,11 +51,11 @@ async def get_instagram_account_info(cookies: list) -> dict:
         try:
             await page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(3000)
+            logger.warning(f"Instagram page URL after load: {page.url}")
 
             user = await page.evaluate("""
                 () => {
                     try {
-                        // Try __additionalData or window._sharedData
                         const sd = window._sharedData;
                         if (sd && sd.config && sd.config.viewer) {
                             const v = sd.config.viewer;
@@ -68,7 +68,6 @@ async def get_instagram_account_info(cookies: list) -> dict:
                                 media_count: v.edge_owner_to_timeline_media ? v.edge_owner_to_timeline_media.count : 0,
                             };
                         }
-                        // Try __initialData or similar
                         const scripts = document.querySelectorAll('script[type="application/json"]');
                         for (const s of scripts) {
                             try {
@@ -79,15 +78,16 @@ async def get_instagram_account_info(cookies: list) -> dict:
                         }
                         return null;
                     } catch(e) {
-                        return null;
+                        return {error: e.toString()};
                     }
                 }
             """)
+            logger.warning(f"Instagram page JS user: {user}")
 
             if not user or not user.get("username"):
-                # Navigate to account settings page as fallback
                 await page.goto("https://www.instagram.com/accounts/edit/", wait_until="domcontentloaded", timeout=20000)
                 await page.wait_for_timeout(2000)
+                logger.warning(f"Instagram accounts/edit URL: {page.url}")
                 user = await page.evaluate("""
                     () => {
                         try {
@@ -104,9 +104,10 @@ async def get_instagram_account_info(cookies: list) -> dict:
                                 };
                             }
                             return null;
-                        } catch(e) { return null; }
+                        } catch(e) { return {error: e.toString()}; }
                     }
                 """)
+                logger.warning(f"Instagram accounts/edit JS user: {user}")
 
             await browser.close()
 
@@ -122,9 +123,11 @@ async def get_instagram_account_info(cookies: list) -> dict:
                     "views": str(user.get("media_count", 0)),
                 }
 
+            logger.error(f"Instagram: could not extract user, final data was: {user}")
+
         except Exception as e:
+            logger.error(f"Instagram Playwright error: {e}", exc_info=True)
             await browser.close()
-            logger.error(f"Instagram Playwright error: {e}")
             raise
 
     raise Exception("Could not verify Instagram session - please re-export your cookies and try again")
