@@ -56,16 +56,13 @@ async def get_instagram_account_info(cookies: list) -> dict:
             user = await page.evaluate("""
                 () => {
                     try {
-                        // Dump all window keys and script contents for debugging
-                        const windowKeys = Object.keys(window).filter(k => k.includes('Data') || k.includes('data') || k.includes('user') || k.includes('User') || k.includes('shared') || k.includes('initial'));
-                        const scripts = Array.from(document.querySelectorAll('script:not([src])')).map(s => s.textContent.slice(0, 200));
-                        return {windowKeys, scripts: scripts.slice(0, 10)};
+                        return JSON.stringify(window._sharedData).slice(0, 3000);
                     } catch(e) {
-                        return {error: e.toString()};
+                        return 'error: ' + e.toString();
                     }
                 }
             """)
-            logger.warning(f"Instagram window keys + scripts: {str(user)[:2000]}")
+            logger.warning(f"Instagram _sharedData: {str(user)[:3000]}")
             user = None
 
             if not user or not user.get("username"):
