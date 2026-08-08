@@ -53,16 +53,40 @@ async def get_instagram_account_info(cookies: list) -> dict:
             await page.wait_for_timeout(3000)
             logger.warning(f"Instagram page URL after load: {page.url}")
 
+            # Call Instagram API from within the browser context (cookies already active)
             user = await page.evaluate("""
-                () => {
+                async () => {
                     try {
-                        return JSON.stringify(window._sharedData).slice(0, 3000);
+                        const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+                        const resp = await fetch('/api/v1/accounts/current_user/?edit=true', {
+                            headers: {
+                                'X-CSRFToken': csrf,
+                                'X-IG-App-ID': '936619743392459',
+                                'X-Requested-With': 'XMLHttpRequest',
+                                'Accept': 'application/json',
+                            },
+                            credentials: 'include',
+                        });
+                        const data = await resp.json();
+                        return data;
                     } catch(e) {
-                        return 'error: ' + e.toString();
+                        return {error: e.toString()};
                     }
                 }
             """)
-            logger.warning(f"Instagram _sharedData: {str(user)[:3000]}")
+            logger.warning(f"Instagram in-page API response: {str(user)[:1000]}")
+            u = user.get("user") if isinstance(user, dict) else None
+            if u and u.get("username"):
+                await browser.close()
+                return {
+                    "username": u.get("username", ""),
+                    "display_name": u.get("full_name") or u.get("username", ""),
+                    "avatar_url": u.get("profile_pic_url_hd") or u.get("profile_pic_url", ""),
+                    "followers": "0",
+                    "following": "0",
+                    "likes": "0",
+                    "views": str(u.get("media_count", 0)),
+                }
             user = None
 
             if not user or not user.get("username"):
