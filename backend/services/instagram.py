@@ -1,99 +1,130 @@
 import logging
-import httpx
+import json
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT_BROWSER = (
+USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/120.0.0.0 Safari/537.36"
 )
-USER_AGENT_MOBILE = (
-    "Instagram 219.0.0.12.117 Android (28/9; 411dpi; 1080x2220; "
-    "samsung; SM-G955U; dream2qltesq; qcom; en_US; 346074847)"
-)
 
-def cookies_to_header(cookies: list) -> str:
-    return "; ".join(f"{c['name']}={c['value']}" for c in cookies if c.get("name") and c.get("value"))
+SAMESITE_MAP = {
+    "no_restriction": "None",
+    "lax": "Lax",
+    "strict": "Strict",
+    "unspecified": "None",
+}
 
-def get_cookie_value(cookies: list, name: str) -> str:
+def normalize_cookies(cookies: list) -> list:
+    result = []
     for c in cookies:
-        if c.get("name") == name:
-            return c.get("value", "")
-    return ""
+        cookie = dict(c)
+        raw = (cookie.get("sameSite") or "").lower()
+        cookie["sameSite"] = SAMESITE_MAP.get(raw, "None")
+        for key in ["hostOnly", "session", "storeId", "id"]:
+            cookie.pop(key, None)
+        if not cookie.get("path"):
+            cookie["path"] = "/"
+        if not cookie.get("domain"):
+            cookie["url"] = "https://www.instagram.com"
+        exp = cookie.get("expirationDate")
+        if exp:
+            cookie["expires"] = int(exp)
+        cookie.pop("expirationDate", None)
+        result.append(cookie)
+    return result
 
 
 async def get_instagram_account_info(cookies: list) -> dict:
-    cookie_header = cookies_to_header(cookies)
-    csrf_token = get_cookie_value(cookies, "csrftoken")
-    user_id = get_cookie_value(cookies, "ds_user_id")
+    from playwright.async_api import async_playwright
 
-    headers_mobile = {
-        "User-Agent": USER_AGENT_MOBILE,
-        "Cookie": cookie_header,
-        "X-CSRFToken": csrf_token,
-        "X-IG-App-ID": "567067343352427",
-        "Accept": "application/json",
-    }
-    headers_web = {
-        "User-Agent": USER_AGENT_BROWSER,
-        "Cookie": cookie_header,
-        "X-CSRFToken": csrf_token,
-        "X-IG-App-ID": "936619743392459",
-        "X-Requested-With": "XMLHttpRequest",
-        "Referer": "https://www.instagram.com/",
-        "Accept": "application/json",
-    }
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox"]
+        )
+        context = await browser.new_context(user_agent=USER_AGENT)
+        await context.add_cookies(normalize_cookies(cookies))
+        page = await context.new_page()
 
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        # Get user info by user_id
-        if user_id:
-            try:
-                resp = await client.get(
-                    f"https://i.instagram.com/api/v1/users/{user_id}/info/",
-                    headers=headers_mobile,
-                    timeout=20,
-                )
-                logger.warning(f"Instagram user info status: {resp.status_code} body: {resp.text[:300]}")
-                data = resp.json()
-                user = data.get("user", {})
-                if user.get("username"):
-                    return _parse_user(user)
-            except Exception as e:
-                logger.warning(f"Instagram user info by id failed: {e}")
-
-        # Fallback: current user endpoint
         try:
-            resp = await client.get(
-                "https://www.instagram.com/api/v1/accounts/current_user/?edit=true",
-                headers=headers_web,
-                timeout=20,
-            )
-            logger.warning(f"Instagram current_user status: {resp.status_code} body: {resp.text[:300]}")
-            data = resp.json()
-            user = data.get("user", {})
-            if user.get("username"):
-                return _parse_user(user)
+            await page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(3000)
+
+            user = await page.evaluate("""
+                () => {
+                    try {
+                        // Try __additionalData or window._sharedData
+                        const sd = window._sharedData;
+                        if (sd && sd.config && sd.config.viewer) {
+                            const v = sd.config.viewer;
+                            return {
+                                username: v.username,
+                                full_name: v.full_name,
+                                profile_pic_url: v.profile_pic_url_hd || v.profile_pic_url,
+                                follower_count: v.edge_followed_by ? v.edge_followed_by.count : 0,
+                                following_count: v.edge_follow ? v.edge_follow.count : 0,
+                                media_count: v.edge_owner_to_timeline_media ? v.edge_owner_to_timeline_media.count : 0,
+                            };
+                        }
+                        // Try __initialData or similar
+                        const scripts = document.querySelectorAll('script[type="application/json"]');
+                        for (const s of scripts) {
+                            try {
+                                const d = JSON.parse(s.textContent);
+                                const u = d?.data?.user || d?.user;
+                                if (u && u.username) return u;
+                            } catch {}
+                        }
+                        return null;
+                    } catch(e) {
+                        return null;
+                    }
+                }
+            """)
+
+            if not user or not user.get("username"):
+                # Navigate to account settings page as fallback
+                await page.goto("https://www.instagram.com/accounts/edit/", wait_until="domcontentloaded", timeout=20000)
+                await page.wait_for_timeout(2000)
+                user = await page.evaluate("""
+                    () => {
+                        try {
+                            const sd = window._sharedData;
+                            if (sd && sd.config && sd.config.viewer) {
+                                const v = sd.config.viewer;
+                                return {
+                                    username: v.username,
+                                    full_name: v.full_name,
+                                    profile_pic_url: v.profile_pic_url_hd || v.profile_pic_url,
+                                    follower_count: v.edge_followed_by ? v.edge_followed_by.count : 0,
+                                    following_count: v.edge_follow ? v.edge_follow.count : 0,
+                                    media_count: 0,
+                                };
+                            }
+                            return null;
+                        } catch(e) { return null; }
+                    }
+                """)
+
+            await browser.close()
+
+            if user and user.get("username"):
+                logger.info(f"Instagram account verified: {user.get('username')}")
+                return {
+                    "username": user.get("username", ""),
+                    "display_name": user.get("full_name") or user.get("username", ""),
+                    "avatar_url": user.get("profile_pic_url_hd") or user.get("profile_pic_url", ""),
+                    "followers": str(user.get("follower_count", user.get("edge_followed_by", {}).get("count", 0))),
+                    "following": str(user.get("following_count", user.get("edge_follow", {}).get("count", 0))),
+                    "likes": "0",
+                    "views": str(user.get("media_count", 0)),
+                }
+
         except Exception as e:
-            logger.warning(f"Instagram current_user endpoint failed: {e}")
+            await browser.close()
+            logger.error(f"Instagram Playwright error: {e}")
+            raise
 
     raise Exception("Could not verify Instagram session - please re-export your cookies and try again")
-
-
-def _parse_user(user: dict) -> dict:
-    username = user.get("username", "")
-    display_name = user.get("full_name") or username
-    avatar_url = user.get("profile_pic_url", "")
-    followers = str(user.get("follower_count", user.get("edge_followed_by", {}).get("count", 0)))
-    following = str(user.get("following_count", user.get("edge_follow", {}).get("count", 0)))
-    likes = "0"
-    views = str(user.get("media_count", 0))
-    return {
-        "username": username,
-        "display_name": display_name,
-        "avatar_url": avatar_url,
-        "followers": followers,
-        "following": following,
-        "likes": likes,
-        "views": views,
-    }
