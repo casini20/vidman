@@ -43,6 +43,7 @@ async def get_instagram_account_info(cookies: list) -> dict:
                     headers=headers,
                     timeout=20,
                 )
+                logger.warning(f"Instagram user info status: {resp.status_code} body: {resp.text[:300]}")
                 data = resp.json()
                 user = data.get("user", {})
                 if user.get("username"):
@@ -57,6 +58,7 @@ async def get_instagram_account_info(cookies: list) -> dict:
                 headers=headers,
                 timeout=20,
             )
+            logger.warning(f"Instagram current_user status: {resp.status_code} body: {resp.text[:300]}")
             data = resp.json()
             user = data.get("user", {})
             if user.get("username"):
