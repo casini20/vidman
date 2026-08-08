@@ -116,54 +116,102 @@ async def post_instagram_video(cookies: list, video_path: str, caption: str) -> 
                     pass
 
             if not clicked:
-                # Navigate directly to create page
                 await page.goto("https://www.instagram.com/create/select/", wait_until="domcontentloaded", timeout=30000)
 
             await page.wait_for_timeout(2000)
             await page.screenshot(path="ig_create.png")
 
-            # Upload file
-            file_input = page.locator('input[type="file"]').first
-            await file_input.set_input_files(video_path)
+            # Click "Post" from the submenu if visible
+            for post_label in ["Post", "Bericht"]:
+                try:
+                    btn = page.get_by_role("menuitem", name=post_label).or_(
+                        page.locator(f'text="{post_label}"').first
+                    )
+                    if await btn.is_visible(timeout=2000):
+                        await btn.click()
+                        logger.info(f"Clicked Post submenu: {post_label}")
+                        await page.wait_for_timeout(2000)
+                        break
+                except Exception:
+                    pass
+
+            await page.screenshot(path="ig_post_modal.png")
+
+            # Wait for file input or "Select from computer" button
+            try:
+                for btn_label in ["Select from computer", "Selecteer van computer", "Van computer selecteren"]:
+                    try:
+                        select_btn = page.get_by_role("button", name=btn_label)
+                        if await select_btn.is_visible(timeout=3000):
+                            async with page.expect_file_chooser(timeout=5000) as fc_info:
+                                await select_btn.click()
+                            file_chooser = await fc_info.value
+                            await file_chooser.set_files(video_path)
+                            logger.info(f"Instagram file set via file chooser: {btn_label}")
+                            await page.wait_for_timeout(3000)
+                            break
+                    except Exception:
+                        pass
+                else:
+                    # Fallback: direct file input
+                    file_input = page.locator('input[type="file"]').first
+                    await file_input.set_input_files(video_path)
+                    logger.info("Instagram file set via direct input")
+                    await page.wait_for_timeout(3000)
+            except Exception as e:
+                logger.warning(f"Instagram file input error: {e}")
             logger.info("Instagram file set")
             await page.wait_for_timeout(3000)
             await page.screenshot(path="ig_after_upload.png")
 
-            # Click Next buttons (may need multiple times through the flow)
-            for step in range(3):
-                for next_text in ["Next", "Volgende", "OK", "Continue"]:
-                    try:
-                        btn = page.get_by_role("button", name=next_text)
-                        if await btn.is_visible(timeout=2000):
-                            await btn.click()
-                            logger.info(f"Instagram clicked: {next_text} (step {step})")
-                            await page.wait_for_timeout(2000)
-                            break
-                    except Exception:
-                        pass
+            # Step 1: Bijsnijden (Crop) → click Volgende
+            await page.wait_for_timeout(2000)
+            for label in ["Volgende", "Next"]:
+                try:
+                    btn = page.get_by_role("link", name=label).or_(page.locator(f'text="{label}"').first)
+                    if await btn.is_visible(timeout=3000):
+                        await btn.click()
+                        logger.info(f"Instagram step 1 Volgende clicked")
+                        await page.wait_for_timeout(2000)
+                        break
+                except Exception:
+                    pass
+
+            await page.screenshot(path="ig_step2.png")
+
+            # Step 2: Bewerken (Edit) → click Volgende
+            for label in ["Volgende", "Next"]:
+                try:
+                    btn = page.get_by_role("link", name=label).or_(page.locator(f'text="{label}"').first)
+                    if await btn.is_visible(timeout=3000):
+                        await btn.click()
+                        logger.info(f"Instagram step 2 Volgende clicked")
+                        await page.wait_for_timeout(2000)
+                        break
+                except Exception:
+                    pass
 
             await page.screenshot(path="ig_caption.png")
 
-            # Add caption
+            # Step 3: Nieuwe reel — add caption in the 0/2200 area
             try:
-                caption_area = page.locator('[aria-label="Write a caption..."], [aria-label="Beschrijving schrijven..."], div[contenteditable="true"]').first
+                caption_area = page.locator('div[contenteditable="true"]').first
                 if await caption_area.is_visible(timeout=3000):
                     await caption_area.click()
                     await caption_area.type(caption, delay=30)
                     logger.info("Instagram caption added")
+                    await page.wait_for_timeout(1000)
             except Exception as e:
                 logger.warning(f"Instagram caption failed: {e}")
 
-            await page.wait_for_timeout(1000)
-
-            # Click Share/Post button
-            for share_text in ["Share", "Delen", "Post", "Publish"]:
+            # Step 4: Click Delen (Share)
+            for share_text in ["Delen", "Share", "Publish"]:
                 try:
-                    btn = page.get_by_role("button", name=share_text)
-                    if await btn.is_visible(timeout=2000):
+                    btn = page.get_by_role("link", name=share_text).or_(page.locator(f'text="{share_text}"').first)
+                    if await btn.is_visible(timeout=3000):
                         await btn.click()
-                        logger.info(f"Instagram clicked share: {share_text}")
-                        await page.wait_for_timeout(5000)
+                        logger.info(f"Instagram Delen clicked")
+                        await page.wait_for_timeout(8000)
                         await page.screenshot(path="ig_after_share.png")
                         await browser.close()
                         return {"success": True}
@@ -171,7 +219,7 @@ async def post_instagram_video(cookies: list, video_path: str, caption: str) -> 
                     pass
 
             await page.screenshot(path="ig_share_failed.png")
-            raise Exception("Could not find Instagram Share button")
+            raise Exception("Could not find Instagram Delen/Share button")
 
         except Exception as e:
             logger.error(f"Instagram post_video error: {e}")
