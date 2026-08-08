@@ -56,33 +56,17 @@ async def get_instagram_account_info(cookies: list) -> dict:
             user = await page.evaluate("""
                 () => {
                     try {
-                        const sd = window._sharedData;
-                        if (sd && sd.config && sd.config.viewer) {
-                            const v = sd.config.viewer;
-                            return {
-                                username: v.username,
-                                full_name: v.full_name,
-                                profile_pic_url: v.profile_pic_url_hd || v.profile_pic_url,
-                                follower_count: v.edge_followed_by ? v.edge_followed_by.count : 0,
-                                following_count: v.edge_follow ? v.edge_follow.count : 0,
-                                media_count: v.edge_owner_to_timeline_media ? v.edge_owner_to_timeline_media.count : 0,
-                            };
-                        }
-                        const scripts = document.querySelectorAll('script[type="application/json"]');
-                        for (const s of scripts) {
-                            try {
-                                const d = JSON.parse(s.textContent);
-                                const u = d?.data?.user || d?.user;
-                                if (u && u.username) return u;
-                            } catch {}
-                        }
-                        return null;
+                        // Dump all window keys and script contents for debugging
+                        const windowKeys = Object.keys(window).filter(k => k.includes('Data') || k.includes('data') || k.includes('user') || k.includes('User') || k.includes('shared') || k.includes('initial'));
+                        const scripts = Array.from(document.querySelectorAll('script:not([src])')).map(s => s.textContent.slice(0, 200));
+                        return {windowKeys, scripts: scripts.slice(0, 10)};
                     } catch(e) {
                         return {error: e.toString()};
                     }
                 }
             """)
-            logger.warning(f"Instagram page JS user: {user}")
+            logger.warning(f"Instagram window keys + scripts: {str(user)[:2000]}")
+            user = None
 
             if not user or not user.get("username"):
                 await page.goto("https://www.instagram.com/accounts/edit/", wait_until="domcontentloaded", timeout=20000)
