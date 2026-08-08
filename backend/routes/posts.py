@@ -21,6 +21,53 @@ UPLOADS_DIR = os.getenv("UPLOADS_DIR", "uploads")
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 
+async def _post_single(item: dict, video_path: str, caption: str) -> tuple[bool, str]:
+    """Post to a single account. Returns (success, error_message)."""
+    pa_id = item["id"]
+    account_id = item["account_id"]
+    username = item["username"]
+
+    try:
+        async with get_db() as db:
+            cursor = await db.execute(
+                "SELECT cookies, platform FROM accounts WHERE id=?", (account_id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                raise Exception("Account not found in DB")
+            cookies = json.loads(row["cookies"])
+            platform = row["platform"] or "tiktok"
+
+        if platform == "instagram" and post_instagram_video:
+            await post_instagram_video(cookies, video_path, caption)
+        elif platform == "instagram":
+            raise Exception("Instagram posting not yet implemented")
+        elif platform == "twitter":
+            raise Exception("Twitter posting not yet implemented")
+        else:
+            await post_video(cookies, video_path, caption)
+
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE post_accounts SET status='success', posted_at=? WHERE id=?",
+                (datetime.now(timezone.utc).isoformat(), pa_id),
+            )
+            await db.commit()
+
+        logger.info(f"Posted to @{username}")
+        return True, ""
+
+    except Exception as exc:
+        logger.error(f"Failed posting to @{username}: {exc}")
+        async with get_db() as db:
+            await db.execute(
+                "UPDATE post_accounts SET status='failed', error_message=? WHERE id=?",
+                (str(exc), pa_id),
+            )
+            await db.commit()
+        return False, str(exc)
+
+
 async def _process_post(post_id: str, video_path: str, caption: str):
     async with get_db() as db:
         cursor = await db.execute(
@@ -33,58 +80,17 @@ async def _process_post(post_id: str, video_path: str, caption: str):
         )
         await db.commit()
 
-    success = failed = 0
+    # Run all accounts concurrently
+    results = await asyncio.gather(
+        *[_post_single(item, video_path, caption) for item in items],
+        return_exceptions=False,
+    )
 
-    for item in items:
-        pa_id = item["id"]
-        account_id = item["account_id"]
-        username = item["username"]
-
-        try:
-            async with get_db() as db:
-                cursor = await db.execute(
-                    "SELECT cookies, platform FROM accounts WHERE id=?", (account_id,)
-                )
-                row = await cursor.fetchone()
-                if not row:
-                    raise Exception("Account not found in DB")
-                cookies = json.loads(row["cookies"])
-                platform = row["platform"] or "tiktok"
-
-            if platform == "instagram" and post_instagram_video:
-                await post_instagram_video(cookies, video_path, caption)
-            elif platform == "instagram":
-                raise Exception("Instagram posting not yet implemented")
-            elif platform == "twitter":
-                raise Exception("Twitter posting not yet implemented")
-            else:
-                await post_video(cookies, video_path, caption)
-
-            async with get_db() as db:
-                await db.execute(
-                    "UPDATE post_accounts SET status='success', posted_at=? WHERE id=?",
-                    (datetime.now(timezone.utc).isoformat(), pa_id),
-                )
-                await db.commit()
-
-            success += 1
-            logger.info(f"Posted to @{username}")
-
-        except Exception as exc:
-            logger.error(f"Failed posting to @{username}: {exc}")
-            async with get_db() as db:
-                await db.execute(
-                    "UPDATE post_accounts SET status='failed', error_message=? WHERE id=?",
-                    (str(exc), pa_id),
-                )
-                await db.commit()
-            failed += 1
-
-        await asyncio.sleep(6)
+    success = sum(1 for ok, _ in results if ok)
+    failed = sum(1 for ok, _ in results if not ok)
 
     final = (
-        "completed"
-        if failed == 0
+        "completed" if failed == 0
         else ("failed" if success == 0 else "partial")
     )
 
@@ -122,13 +128,9 @@ async def create_post(
 
     async with get_db() as db:
         for aid in ids:
-            cursor = await db.execute(
-                "SELECT id FROM accounts WHERE id=?", (aid,)
-            )
+            cursor = await db.execute("SELECT id FROM accounts WHERE id=?", (aid,))
             if not await cursor.fetchone():
-                raise HTTPException(
-                    status_code=404, detail=f"Account {aid} not found"
-                )
+                raise HTTPException(status_code=404, detail=f"Account {aid} not found")
 
         await db.execute(
             """INSERT INTO posts (id, caption, video_filename, video_path, status, total_accounts)
@@ -137,9 +139,7 @@ async def create_post(
         )
 
         for aid in ids:
-            cursor = await db.execute(
-                "SELECT username FROM accounts WHERE id=?", (aid,)
-            )
+            cursor = await db.execute("SELECT username FROM accounts WHERE id=?", (aid,))
             row = await cursor.fetchone()
             username = row["username"] if row else aid
             await db.execute(
@@ -172,10 +172,8 @@ async def get_post(post_id: str):
         post = await cursor.fetchone()
         if not post:
             raise HTTPException(status_code=404, detail="Post not found")
-
         cursor = await db.execute(
             "SELECT * FROM post_accounts WHERE post_id=?", (post_id,)
         )
         accounts = [dict(r) for r in await cursor.fetchall()]
-
     return {**dict(post), "accounts": accounts}
