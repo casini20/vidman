@@ -3,10 +3,14 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT = (
+USER_AGENT_BROWSER = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/120.0.0.0 Safari/537.36"
+)
+USER_AGENT_MOBILE = (
+    "Instagram 219.0.0.12.117 Android (28/9; 411dpi; 1080x2220; "
+    "samsung; SM-G955U; dream2qltesq; qcom; en_US; 346074847)"
 )
 
 def cookies_to_header(cookies: list) -> str:
@@ -24,8 +28,15 @@ async def get_instagram_account_info(cookies: list) -> dict:
     csrf_token = get_cookie_value(cookies, "csrftoken")
     user_id = get_cookie_value(cookies, "ds_user_id")
 
-    headers = {
-        "User-Agent": USER_AGENT,
+    headers_mobile = {
+        "User-Agent": USER_AGENT_MOBILE,
+        "Cookie": cookie_header,
+        "X-CSRFToken": csrf_token,
+        "X-IG-App-ID": "567067343352427",
+        "Accept": "application/json",
+    }
+    headers_web = {
+        "User-Agent": USER_AGENT_BROWSER,
         "Cookie": cookie_header,
         "X-CSRFToken": csrf_token,
         "X-IG-App-ID": "936619743392459",
@@ -40,7 +51,7 @@ async def get_instagram_account_info(cookies: list) -> dict:
             try:
                 resp = await client.get(
                     f"https://i.instagram.com/api/v1/users/{user_id}/info/",
-                    headers=headers,
+                    headers=headers_mobile,
                     timeout=20,
                 )
                 logger.warning(f"Instagram user info status: {resp.status_code} body: {resp.text[:300]}")
@@ -55,7 +66,7 @@ async def get_instagram_account_info(cookies: list) -> dict:
         try:
             resp = await client.get(
                 "https://www.instagram.com/api/v1/accounts/current_user/?edit=true",
-                headers=headers,
+                headers=headers_web,
                 timeout=20,
             )
             logger.warning(f"Instagram current_user status: {resp.status_code} body: {resp.text[:300]}")
