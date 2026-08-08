@@ -9,6 +9,10 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Uploa
 
 from database import get_db
 from services.tiktok import post_video
+try:
+    from services.instagram import post_instagram_video
+except ImportError:
+    post_instagram_video = None
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -17,12 +21,7 @@ UPLOADS_DIR = os.getenv("UPLOADS_DIR", "uploads")
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 
-# ---------------------------------------------------------------------------
-# Background worker
-# ---------------------------------------------------------------------------
-
 async def _process_post(post_id: str, video_path: str, caption: str):
-    """Run in background: iterate accounts and post the video one by one."""
     async with get_db() as db:
         cursor = await db.execute(
             "SELECT id, account_id, username FROM post_accounts WHERE post_id=?",
@@ -44,14 +43,22 @@ async def _process_post(post_id: str, video_path: str, caption: str):
         try:
             async with get_db() as db:
                 cursor = await db.execute(
-                    "SELECT cookies FROM accounts WHERE id=?", (account_id,)
+                    "SELECT cookies, platform FROM accounts WHERE id=?", (account_id,)
                 )
                 row = await cursor.fetchone()
                 if not row:
                     raise Exception("Account not found in DB")
                 cookies = json.loads(row["cookies"])
+                platform = row["platform"] or "tiktok"
 
-            await post_video(cookies, video_path, caption)
+            if platform == "instagram" and post_instagram_video:
+                await post_instagram_video(cookies, video_path, caption)
+            elif platform == "instagram":
+                raise Exception("Instagram posting not yet implemented")
+            elif platform == "twitter":
+                raise Exception("Twitter posting not yet implemented")
+            else:
+                await post_video(cookies, video_path, caption)
 
             async with get_db() as db:
                 await db.execute(
@@ -73,7 +80,6 @@ async def _process_post(post_id: str, video_path: str, caption: str):
                 await db.commit()
             failed += 1
 
-        # Small delay between accounts to avoid triggering rate limits
         await asyncio.sleep(6)
 
     final = (
@@ -90,16 +96,12 @@ async def _process_post(post_id: str, video_path: str, caption: str):
         await db.commit()
 
 
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
-
 @router.post("/")
 async def create_post(
     background_tasks: BackgroundTasks,
     caption: str = Form(...),
     video: UploadFile = File(...),
-    account_ids: str = Form(...),  # JSON array  e.g. '["uuid1","uuid2"]'
+    account_ids: str = Form(...),
 ):
     try:
         ids: list[str] = json.loads(account_ids)
