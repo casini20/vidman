@@ -174,36 +174,20 @@ async def post_instagram_video(cookies: list, video_path: str, caption: str) -> 
             except Exception:
                 pass
 
-            # Step 1: Bijsnijden (Crop) → click Volgende
+            # Step 1: Crop → click Next (top-right link ~1066,108)
             await page.wait_for_timeout(2000)
-            for label in ["Volgende", "Next"]:
-                try:
-                    btn = page.get_by_role("link", name=label).or_(page.locator(f'text="{label}"').first)
-                    if await btn.is_visible(timeout=3000):
-                        await btn.click()
-                        logger.info(f"Instagram step 1 Volgende clicked")
-                        await page.wait_for_timeout(2000)
-                        break
-                except Exception:
-                    pass
-
+            await page.mouse.click(1066, 108)
+            logger.info("Instagram step 1 Next clicked (coord)")
+            await page.wait_for_timeout(2000)
             await page.screenshot(path="ig_step2.png")
 
-            # Step 2: Bewerken (Edit) → click Volgende
-            for label in ["Volgende", "Next"]:
-                try:
-                    btn = page.get_by_role("link", name=label).or_(page.locator(f'text="{label}"').first)
-                    if await btn.is_visible(timeout=3000):
-                        await btn.click()
-                        logger.info(f"Instagram step 2 Volgende clicked")
-                        await page.wait_for_timeout(2000)
-                        break
-                except Exception:
-                    pass
-
+            # Step 2: Edit → click Next
+            await page.mouse.click(1066, 108)
+            logger.info("Instagram step 2 Next clicked (coord)")
+            await page.wait_for_timeout(2000)
             await page.screenshot(path="ig_caption.png")
 
-            # Step 3: Nieuwe reel — add caption in the 0/2200 area
+            # Step 3: Caption — type in the 0/2200 area
             try:
                 caption_area = page.locator('div[contenteditable="true"]').first
                 if await caption_area.is_visible(timeout=3000):
@@ -214,22 +198,13 @@ async def post_instagram_video(cookies: list, video_path: str, caption: str) -> 
             except Exception as e:
                 logger.warning(f"Instagram caption failed: {e}")
 
-            # Step 4: Click Delen (Share)
-            for share_text in ["Delen", "Share", "Publish"]:
-                try:
-                    btn = page.get_by_role("link", name=share_text).or_(page.locator(f'text="{share_text}"').first)
-                    if await btn.is_visible(timeout=3000):
-                        await btn.click()
-                        logger.info(f"Instagram Delen clicked")
-                        await page.wait_for_timeout(8000)
-                        await page.screenshot(path="ig_after_share.png")
-                        await browser.close()
-                        return {"success": True}
-                except Exception:
-                    pass
-
-            await page.screenshot(path="ig_share_failed.png")
-            raise Exception("Could not find Instagram Delen/Share button")
+            # Step 4: Share → click Share link (top-right ~1066,108)
+            await page.mouse.click(1066, 108)
+            logger.info("Instagram Share clicked (coord)")
+            await page.wait_for_timeout(8000)
+            await page.screenshot(path="ig_after_share.png")
+            await browser.close()
+            return {"success": True}
 
         except Exception as e:
             logger.error(f"Instagram post_video error: {e}")
