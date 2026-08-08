@@ -174,20 +174,37 @@ async def post_instagram_video(cookies: list, video_path: str, caption: str) -> 
             except Exception:
                 pass
 
-            # Step 1: Crop → click Next (top-right link ~1066,108)
+            async def click_top_right_button(labels):
+                """Click a button/link by text, scoped to the modal header."""
+                for label in labels:
+                    for sel in [
+                        f'[role="button"]:has-text("{label}")',
+                        f'button:has-text("{label}")',
+                        f'a:has-text("{label}")',
+                        f'div:has-text("{label}")',
+                    ]:
+                        try:
+                            el = page.locator(sel).last  # last = rightmost in DOM
+                            if await el.is_visible(timeout=2000):
+                                await el.click()
+                                logger.info(f"Instagram clicked: {label} via {sel}")
+                                return True
+                        except Exception:
+                            pass
+                return False
+
+            # Step 1: Crop → Next
             await page.wait_for_timeout(2000)
-            await page.mouse.click(1066, 108)
-            logger.info("Instagram step 1 Next clicked (coord)")
+            await click_top_right_button(["Next", "Volgende"])
             await page.wait_for_timeout(2000)
             await page.screenshot(path="ig_step2.png")
 
-            # Step 2: Edit → click Next
-            await page.mouse.click(1066, 108)
-            logger.info("Instagram step 2 Next clicked (coord)")
+            # Step 2: Edit → Next
+            await click_top_right_button(["Next", "Volgende"])
             await page.wait_for_timeout(2000)
             await page.screenshot(path="ig_caption.png")
 
-            # Step 3: Caption — type in the 0/2200 area
+            # Step 3: Caption
             try:
                 caption_area = page.locator('div[contenteditable="true"]').first
                 if await caption_area.is_visible(timeout=3000):
@@ -198,9 +215,8 @@ async def post_instagram_video(cookies: list, video_path: str, caption: str) -> 
             except Exception as e:
                 logger.warning(f"Instagram caption failed: {e}")
 
-            # Step 4: Share → click Share link (top-right ~1066,108)
-            await page.mouse.click(1066, 108)
-            logger.info("Instagram Share clicked (coord)")
+            # Step 4: Share
+            await click_top_right_button(["Share", "Delen", "Publish"])
             await page.wait_for_timeout(8000)
             await page.screenshot(path="ig_after_share.png")
             await browser.close()
