@@ -3,8 +3,8 @@ import "./globals.css";
 import Sidebar from "@/components/Sidebar";
 
 export const metadata: Metadata = {
-  title: "TikTok Manager",
-  description: "Post to all your TikTok accounts at once",
+  title: "Vidman",
+  description: "Post to all your social media accounts at once",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
