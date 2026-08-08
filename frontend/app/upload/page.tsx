@@ -6,12 +6,38 @@ import {
   Upload, Film, CheckSquare, Square, X, Loader2, CheckCircle, XCircle, Sparkles
 } from "lucide-react";
 
+type Platform = "tiktok" | "instagram" | "twitter";
+
 type PostResult = {
   post_id: string;
   accounts: { username: string; status: string; error_message?: string }[];
 };
 
 const GROQ_API_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY || "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";
+
+const PLATFORM_META: Record<Platform, { label: string; color: string; bg: string; border: string; dot: string }> = {
+  tiktok:    { label: "TikTok",    color: "text-[#FF2D55]", bg: "bg-[#FF2D55]", border: "border-[#FF2D55]", dot: "#FF2D55" },
+  instagram: { label: "Instagram", color: "text-[#E1306C]", bg: "bg-[#E1306C]", border: "border-[#E1306C]", dot: "#E1306C" },
+  twitter:   { label: "X / Twitter", color: "text-[#1D9BF0]", bg: "bg-[#1D9BF0]", border: "border-[#1D9BF0]", dot: "#1D9BF0" },
+};
+
+function PlatformDot({ platform }: { platform: Platform }) {
+  return (
+    <span
+      className="inline-block w-2 h-2 rounded-full flex-shrink-0"
+      style={{ background: PLATFORM_META[platform].dot }}
+    />
+  );
+}
+
+function PlatformBadge({ platform }: { platform: Platform }) {
+  const m = PLATFORM_META[platform];
+  return (
+    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${m.color} ${m.border} border-opacity-40 bg-opacity-10 ${m.bg}`}>
+      {m.label}
+    </span>
+  );
+}
 
 export default function UploadPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -43,6 +69,16 @@ export default function UploadPage() {
       return next;
     });
 
+  const togglePlatform = (platform: Platform) => {
+    const platformAccounts = accounts.filter((a) => (a.platform as Platform) === platform);
+    const allSelected = platformAccounts.every((a) => selectedIds.has(a.id));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      platformAccounts.forEach((a) => allSelected ? next.delete(a.id) : next.add(a.id));
+      return next;
+    });
+  };
+
   const toggleAll = () =>
     setSelectedIds((prev) =>
       prev.size === accounts.length ? new Set() : new Set(accounts.map((a) => a.id))
@@ -62,41 +98,26 @@ export default function UploadPage() {
 
   const generateCaption = async () => {
     if (!topic.trim()) return;
-    console.log("API Key present:", !!GROQ_API_KEY);
     setGenerating(true);
     try {
       const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${GROQ_API_KEY}`,
-        },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GROQ_API_KEY}` },
         body: JSON.stringify({
-          model: "llama3-8b-8192",
+          model: "llama-3.1-8b-instant",
           messages: [
-            {
-              role: "system",
-              content: "You are a TikTok caption writer. Write short, punchy captions with relevant hashtags. Max 150 characters before hashtags. Include 5-8 trending hashtags. Return ONLY the caption text, nothing else.",
-            },
-            {
-              role: "user",
-              content: `Write a TikTok caption for a video about: ${topic}`,
-            },
+            { role: "system", content: "You are a social media caption writer. Write short, punchy captions with relevant hashtags. Max 150 characters before hashtags. Include 5-8 trending hashtags. Return ONLY the caption text, nothing else." },
+            { role: "user", content: `Write a social media caption for a video about: ${topic}` },
           ],
           max_tokens: 200,
           temperature: 0.9,
         }),
       });
       const data = await res.json();
-      console.log("Groq response:", JSON.stringify(data));
-      if (data.error) {
-        alert("Groq error: " + data.error.message);
-        return;
-      }
+      if (data.error) { alert("Groq error: " + data.error.message); return; }
       const generated = data.choices?.[0]?.message?.content?.trim();
       if (generated) setCaption(generated);
     } catch (e: any) {
-      console.error("Groq error:", e);
       alert("Error: " + e.message);
     } finally {
       setGenerating(false);
@@ -119,9 +140,7 @@ export default function UploadPage() {
             })),
           });
         }
-      } catch {
-        /* keep polling */
-      }
+      } catch { /* keep polling */ }
     }, 4000);
   };
 
@@ -130,13 +149,11 @@ export default function UploadPage() {
     setPosting(true);
     setError("");
     setResult(null);
-
     try {
       const fd = new FormData();
       fd.append("video", file);
       fd.append("caption", caption);
       fd.append("account_ids", JSON.stringify([...selectedIds]));
-
       const { post_id } = await api.posts.create(fd);
       pollPostStatus(post_id);
     } catch (e: any) {
@@ -146,13 +163,15 @@ export default function UploadPage() {
   };
 
   const reset = () => {
-    setFile(null);
-    setCaption("");
-    setTopic("");
-    setResult(null);
-    setError("");
+    setFile(null); setCaption(""); setTopic(""); setResult(null); setError("");
     setSelectedIds(new Set(accounts.map((a) => a.id)));
   };
+
+  // Group accounts by platform
+  const byPlatform = (["tiktok", "instagram", "twitter"] as Platform[]).map((p) => ({
+    platform: p,
+    accounts: accounts.filter((a) => (a.platform as Platform) === p || (!a.platform && p === "tiktok")),
+  })).filter((g) => g.accounts.length > 0);
 
   if (result) {
     return (
@@ -160,32 +179,18 @@ export default function UploadPage() {
         <CheckCircle size={48} className="text-success mx-auto mb-4" />
         <h2 className="text-xl font-bold mb-2">Post complete</h2>
         <p className="text-muted text-sm mb-6">Here's how each account went:</p>
-
         <div className="bg-card border border-border rounded-xl overflow-hidden mb-6 text-left">
           {result.accounts.map((a) => (
-            <div
-              key={a.username}
-              className="flex items-center gap-3 px-5 py-3 border-b border-border last:border-0"
-            >
-              {a.status === "success" ? (
-                <CheckCircle size={16} className="text-success flex-shrink-0" />
-              ) : (
-                <XCircle size={16} className="text-error flex-shrink-0" />
-              )}
+            <div key={a.username} className="flex items-center gap-3 px-5 py-3 border-b border-border last:border-0">
+              {a.status === "success"
+                ? <CheckCircle size={16} className="text-success flex-shrink-0" />
+                : <XCircle size={16} className="text-error flex-shrink-0" />}
               <span className="text-sm flex-1">@{a.username}</span>
-              {a.error_message && (
-                <span className="text-xs text-muted max-w-[160px] truncate">
-                  {a.error_message}
-                </span>
-              )}
+              {a.error_message && <span className="text-xs text-muted max-w-[160px] truncate">{a.error_message}</span>}
             </div>
           ))}
         </div>
-
-        <button
-          onClick={reset}
-          className="bg-red hover:bg-opacity-90 transition text-white px-6 py-2.5 rounded-lg font-semibold text-sm"
-        >
+        <button onClick={reset} className="bg-red hover:bg-opacity-90 transition text-white px-6 py-2.5 rounded-lg font-semibold text-sm">
           Upload another video
         </button>
       </div>
@@ -206,28 +211,16 @@ export default function UploadPage() {
         onDragLeave={() => setDragging(false)}
         onDragOver={(e) => e.preventDefault()}
         onDrop={onFileDrop}
-        className={`
-          relative border-2 border-dashed rounded-xl p-10 flex flex-col items-center justify-center
-          cursor-pointer transition-all mb-6
-          ${dragging ? "border-red bg-red bg-opacity-5" : "border-border hover:border-muted"}
-        `}
+        className={`relative border-2 border-dashed rounded-xl p-10 flex flex-col items-center justify-center cursor-pointer transition-all mb-6
+          ${dragging ? "border-red bg-red bg-opacity-5" : "border-border hover:border-muted"}`}
       >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="video/*"
-          className="hidden"
-          onChange={onFileChange}
-        />
+        <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={onFileChange} />
         {file ? (
           <>
             <Film size={32} className="text-red mb-3" />
             <p className="font-medium">{file.name}</p>
             <p className="text-muted text-xs mt-1">{(file.size / 1024 / 1024).toFixed(1)} MB</p>
-            <button
-              onClick={(e) => { e.stopPropagation(); setFile(null); }}
-              className="absolute top-3 right-3 text-muted hover:text-white transition"
-            >
+            <button onClick={(e) => { e.stopPropagation(); setFile(null); }} className="absolute top-3 right-3 text-muted hover:text-white transition">
               <X size={16} />
             </button>
           </>
@@ -240,7 +233,7 @@ export default function UploadPage() {
         )}
       </div>
 
-      {/* AI Caption Generator */}
+      {/* AI Caption */}
       <div className="mb-4">
         <label className="block text-sm font-medium mb-2">AI Caption</label>
         <div className="flex gap-2">
@@ -256,11 +249,7 @@ export default function UploadPage() {
             disabled={!topic.trim() || generating}
             className="flex items-center gap-2 bg-cyan bg-opacity-20 hover:bg-opacity-30 border border-cyan border-opacity-40 disabled:opacity-40 disabled:cursor-not-allowed transition text-cyan px-4 py-2.5 rounded-xl text-sm font-semibold"
           >
-            {generating ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : (
-              <Sparkles size={16} />
-            )}
+            {generating ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
             {generating ? "Generating..." : "Generate"}
           </button>
         </div>
@@ -278,12 +267,11 @@ export default function UploadPage() {
         />
       </div>
 
-      {/* Account picker */}
+      {/* Account picker — grouped by platform */}
       <div className="mb-8">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-4">
           <label className="text-sm font-medium">
-            Post to accounts{" "}
-            <span className="text-muted font-normal">({selectedIds.size} selected)</span>
+            Post to <span className="text-muted font-normal">({selectedIds.size} account{selectedIds.size !== 1 ? "s" : ""} selected)</span>
           </label>
           <button onClick={toggleAll} className="text-xs text-cyan hover:underline">
             {selectedIds.size === accounts.length ? "Deselect all" : "Select all"}
@@ -292,44 +280,65 @@ export default function UploadPage() {
 
         {accounts.length === 0 ? (
           <div className="bg-card border border-border rounded-xl p-5 text-center text-sm text-muted">
-            No accounts connected.{" "}
-            <a href="/accounts" className="text-cyan hover:underline">Add one</a>.
+            No accounts connected. <a href="/accounts" className="text-cyan hover:underline">Add one</a>.
           </div>
         ) : (
-          <div className="space-y-2">
-            {accounts.map((acc) => {
-              const checked = selectedIds.has(acc.id);
+          <div className="space-y-5">
+            {byPlatform.map(({ platform, accounts: platAccs }) => {
+              const meta = PLATFORM_META[platform];
+              const allSelected = platAccs.every((a) => selectedIds.has(a.id));
+              const someSelected = platAccs.some((a) => selectedIds.has(a.id));
               return (
-                <button
-                  key={acc.id}
-                  onClick={() => toggle(acc.id)}
-                  className={`
-                    w-full flex items-center gap-3 p-3 rounded-xl border text-left transition
-                    ${checked ? "border-red bg-red bg-opacity-5" : "border-border bg-card hover:border-muted"}
-                  `}
-                >
-                  {checked ? (
-                    <CheckSquare size={18} className="text-red flex-shrink-0" />
-                  ) : (
-                    <Square size={18} className="text-muted flex-shrink-0" />
-                  )}
-                  <div className="w-7 h-7 rounded-full bg-surface flex items-center justify-center flex-shrink-0 overflow-hidden">
-                    {acc.avatar_url ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={acc.avatar_url} alt={acc.username} className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="text-xs font-bold text-muted">
-                        {acc.username.charAt(0).toUpperCase()}
+                <div key={platform}>
+                  {/* Platform header */}
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <PlatformDot platform={platform} />
+                      <span className={`text-xs font-semibold uppercase tracking-widest ${meta.color}`}>
+                        {meta.label}
                       </span>
-                    )}
+                      <span className="text-xs text-muted">({platAccs.length})</span>
+                    </div>
+                    <button
+                      onClick={() => togglePlatform(platform)}
+                      className={`text-xs hover:underline ${meta.color}`}
+                    >
+                      {allSelected ? "Deselect all" : someSelected ? "Select all" : "Select all"}
+                    </button>
                   </div>
-                  <div>
-                    <p className="text-sm font-medium leading-none">@{acc.username}</p>
-                    {acc.display_name && (
-                      <p className="text-xs text-muted mt-0.5">{acc.display_name}</p>
-                    )}
+
+                  {/* Accounts */}
+                  <div className="space-y-2">
+                    {platAccs.map((acc) => {
+                      const checked = selectedIds.has(acc.id);
+                      return (
+                        <button
+                          key={acc.id}
+                          onClick={() => toggle(acc.id)}
+                          className={`w-full flex items-center gap-3 p-3 rounded-xl border text-left transition
+                            ${checked
+                              ? `${meta.border} border-opacity-50 bg-opacity-5 ${meta.bg}`
+                              : "border-border bg-card hover:border-muted"}`}
+                        >
+                          {checked
+                            ? <CheckSquare size={18} className={`${meta.color} flex-shrink-0`} />
+                            : <Square size={18} className="text-muted flex-shrink-0" />}
+                          <div className="w-7 h-7 rounded-full bg-surface flex items-center justify-center flex-shrink-0 overflow-hidden">
+                            {acc.avatar_url
+                              // eslint-disable-next-line @next/next/no-img-element
+                              ? <img src={acc.avatar_url} alt={acc.username} className="w-full h-full object-cover" />
+                              : <span className="text-xs font-bold text-muted">{acc.username.charAt(0).toUpperCase()}</span>}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium leading-none">@{acc.username}</p>
+                            {acc.display_name && <p className="text-xs text-muted mt-0.5">{acc.display_name}</p>}
+                          </div>
+                          <PlatformBadge platform={platform} />
+                        </button>
+                      );
+                    })}
                   </div>
-                </button>
+                </div>
               );
             })}
           </div>
@@ -337,9 +346,7 @@ export default function UploadPage() {
       </div>
 
       {error && (
-        <p className="text-error text-sm mb-4 bg-error bg-opacity-10 border border-error border-opacity-30 rounded-lg px-3 py-2">
-          {error}
-        </p>
+        <p className="text-error text-sm mb-4 bg-error bg-opacity-10 border border-error border-opacity-30 rounded-lg px-3 py-2">{error}</p>
       )}
 
       <button
@@ -347,24 +354,12 @@ export default function UploadPage() {
         disabled={!file || selectedIds.size === 0 || !caption.trim() || posting}
         className="w-full bg-red hover:bg-opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition text-white py-3 rounded-xl font-semibold flex items-center justify-center gap-2"
       >
-        {posting ? (
-          <>
-            <Loader2 size={18} className="animate-spin" />
-            Posting to {selectedIds.size} account{selectedIds.size !== 1 ? "s" : ""}…
-          </>
-        ) : (
-          <>
-            <Upload size={18} />
-            Post to {selectedIds.size} account{selectedIds.size !== 1 ? "s" : ""}
-          </>
-        )}
+        {posting
+          ? <><Loader2 size={18} className="animate-spin" />Posting to {selectedIds.size} account{selectedIds.size !== 1 ? "s" : ""}…</>
+          : <><Upload size={18} />Post to {selectedIds.size} account{selectedIds.size !== 1 ? "s" : ""}</>}
       </button>
 
-      {posting && (
-        <p className="text-muted text-xs text-center mt-3">
-          This can take a few minutes — don't close this tab.
-        </p>
-      )}
+      {posting && <p className="text-muted text-xs text-center mt-3">This can take a few minutes — don't close this tab.</p>}
     </div>
   );
 }

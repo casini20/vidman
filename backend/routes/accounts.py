@@ -11,6 +11,7 @@ router = APIRouter()
 
 class AddAccountRequest(BaseModel):
     cookies: str  # JSON array exported from Cookie-Editor
+    platform: str = "tiktok"
 
 
 def row_to_dict(row) -> dict:
@@ -22,7 +23,7 @@ async def list_accounts():
     async with get_db() as db:
         cursor = await db.execute(
             "SELECT id, username, display_name, avatar_url, "
-            "followers, following, likes, views, last_synced, created_at FROM accounts"
+            "followers, following, likes, views, platform, last_synced, created_at FROM accounts"
         )
         rows = await cursor.fetchall()
         return [row_to_dict(r) for r in rows]
@@ -60,7 +61,7 @@ async def add_account(request: AddAccountRequest):
             await db.execute(
                 """UPDATE accounts
                    SET cookies=?, display_name=?, avatar_url=?,
-                       followers=?, following=?, likes=?, views=?, last_synced=?
+                       followers=?, following=?, likes=?, views=?, platform=?, last_synced=?
                    WHERE username=?""",
                 (
                     cookies_str,
@@ -70,6 +71,7 @@ async def add_account(request: AddAccountRequest):
                     info["following"],
                     info["likes"],
                     info.get("views", "0"),
+                    request.platform,
                     now,
                     info["username"],
                 ),
@@ -80,8 +82,8 @@ async def add_account(request: AddAccountRequest):
         account_id = str(uuid.uuid4())
         await db.execute(
             """INSERT INTO accounts
-               (id, username, display_name, avatar_url, cookies, followers, following, likes, views, last_synced)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+               (id, username, display_name, avatar_url, cookies, followers, following, likes, views, platform, last_synced)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 account_id,
                 info["username"],
@@ -92,6 +94,7 @@ async def add_account(request: AddAccountRequest):
                 info["following"],
                 info["likes"],
                 info.get("views", "0"),
+                request.platform,
                 now,
             ),
         )

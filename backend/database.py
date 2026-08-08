@@ -23,6 +23,7 @@ async def init_db():
                 following TEXT DEFAULT '0',
                 likes TEXT DEFAULT '0',
                 views TEXT DEFAULT '0',
+                platform TEXT DEFAULT 'tiktok',
                 last_synced TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             )
@@ -56,6 +57,11 @@ async def init_db():
         # Migration: add views column if not present
         try:
             await db.execute("ALTER TABLE accounts ADD COLUMN views TEXT DEFAULT '0'")
+            await db.commit()
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE accounts ADD COLUMN platform TEXT DEFAULT 'tiktok'")
             await db.commit()
         except Exception:
             pass

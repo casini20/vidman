@@ -18,6 +18,7 @@ export interface Account {
   following: string;
   likes: string;
   views?: string;
+  platform?: string;
   last_synced?: string;
   created_at: string;
 }
@@ -47,11 +48,11 @@ export interface PostAccount {
 export const api = {
   accounts: {
     list: () => request<Account[]>("/api/accounts/"),
-    add: (cookies: string) =>
+    add: (cookies: string, platform?: string) =>
       request<Account & { message: string }>("/api/accounts/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cookies }),
+        body: JSON.stringify({ cookies, platform: platform ?? "tiktok" }),
       }),
     remove: (id: string) =>
       request<{ message: string }>(`/api/accounts/${id}`, { method: "DELETE" }),
