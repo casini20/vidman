@@ -33,37 +33,25 @@ async def get_instagram_account_info(cookies: list) -> dict:
             await page.screenshot(path="ig_edit_page.png")
             logger.warning(f"Edit page URL: {page.url}")
 
+            # Find the profile link in the sidebar — its href contains the username
             username = await page.evaluate("""
                 () => {
-                    // New Instagram layout: username is shown as text under the name in profile card
-                    // Try the small text under the display name
-                    const subtexts = document.querySelectorAll('span, p, div');
-                    for (const el of subtexts) {
-                        const t = (el.innerText || '').trim();
-                        // Username: short, no spaces, alphanumeric + dots + underscores
-                        if (t && t.length < 30 && /^[a-zA-Z0-9._]+$/.test(t) && !t.includes(' ')) {
-                            const parent = el.closest('a');
-                            if (parent && parent.href && parent.href.includes('instagram.com')) return t;
+                    // Profile link in sidebar: href="/username/" excluding known non-usernames
+                    const skip = new Set(['explore','reels','messages','notifications','search','accounts','direct','tv','ar','p','reel','stories','home','settings']);
+                    const links = document.querySelectorAll('a[href]');
+                    for (const a of links) {
+                        const m = a.href.match(/instagram\.com\/([^/?#]+)\/?$/);
+                        if (m && !skip.has(m[1].toLowerCase()) && /^[a-zA-Z0-9._]+$/.test(m[1])) {
+                            return m[1];
                         }
-                    }
-                    // Fallback: try to find from page URL or meta
-                    const canonical = document.querySelector('link[rel="canonical"]');
-                    if (canonical) {
-                        const m = canonical.href.match(/instagram\.com\/([^/]+)\/?$/);
-                        if (m) return m[1];
-                    }
-                    // Try input fields (old layout)
-                    const inputs = document.querySelectorAll('input');
-                    for (const inp of inputs) {
-                        if ((inp.getAttribute('name') || '').toLowerCase() === 'username') return inp.value;
                     }
                     return null;
                 }
             """)
-            logger.warning(f"Extracted username: {username}")
+            logger.warning(f"Extracted username from sidebar: {username}")
 
             if not username:
-                raise Exception("Could not extract username from edit page")
+                raise Exception("Could not extract username — cookies may be expired")
 
             # Get stats from profile page
             await page.goto(f"https://www.instagram.com/{username}/", wait_until="domcontentloaded", timeout=30000)
@@ -97,7 +85,7 @@ async def get_instagram_account_info(cookies: list) -> dict:
                 }
             """)
 
-            logger.info(f"Instagram stats for {username}: {stats}")
+            logger.warning(f"Instagram stats raw for {username}: {str(stats)[:500]}")
 
             followers = "0"
             following = "0"
