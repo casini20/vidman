@@ -120,6 +120,42 @@ async def get_instagram_account_info(cookies: list) -> dict:
                 }
             """)
 
+            # Fetch media feed from within browser context to sum likes + views
+            total_likes = 0
+            total_views = 0
+            try:
+                ds_user_id = get_cookie_value(cookies, "ds_user_id")
+                all_items = await page.evaluate(f"""
+                    async () => {{
+                        const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+                        const headers = {{
+                            'X-IG-App-ID': '936619743392459',
+                            'X-CSRFToken': csrf,
+                            'X-Requested-With': 'XMLHttpRequest',
+                        }};
+                        let items = [];
+                        let maxId = '';
+                        let hasMore = true;
+                        while (hasMore) {{
+                            const url = '/api/v1/feed/user/{ds_user_id}/?count=50' + (maxId ? '&max_id=' + maxId : '');
+                            const resp = await fetch(url, {{ headers, credentials: 'include' }});
+                            const data = await resp.json();
+                            const batch = data.items || [];
+                            items = items.concat(batch);
+                            hasMore = data.more_available === true && batch.length > 0;
+                            maxId = data.next_max_id || '';
+                            if (!maxId) hasMore = false;
+                        }}
+                        return items;
+                    }}
+                """)
+                for item in (all_items or []):
+                    total_likes += item.get("like_count", 0)
+                    total_views += item.get("play_count", item.get("view_count", 0))
+                logger.info(f"Instagram media stats: {len(all_items or [])} posts, {total_likes} likes, {total_views} views")
+            except Exception as e:
+                logger.warning(f"Could not fetch Instagram media stats: {e}")
+
             await browser.close()
             return {
                 "username": username,
@@ -127,8 +163,8 @@ async def get_instagram_account_info(cookies: list) -> dict:
                 "avatar_url": avatar_url or "",
                 "followers": followers,
                 "following": following,
-                "likes": posts,
-                "views": "0",
+                "likes": str(total_likes),
+                "views": str(total_views) if total_views > 0 else posts,
             }
 
         except Exception as e:
