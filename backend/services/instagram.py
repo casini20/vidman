@@ -30,19 +30,25 @@ async def get_instagram_account_info(cookies: list) -> dict:
             await page.goto("https://www.instagram.com/accounts/edit/", wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(3000)
 
+            await page.screenshot(path="ig_edit_page.png")
+            logger.warning(f"Edit page URL: {page.url}")
+
             username = await page.evaluate("""
                 () => {
                     const inputs = document.querySelectorAll('input');
-                    for (const inp of inputs) {
-                        const name = (inp.getAttribute('name') || '').toLowerCase();
-                        if (name === 'username') return inp.value;
-                    }
-                    return null;
+                    const result = {};
+                    inputs.forEach(inp => {
+                        result[inp.getAttribute('name') || inp.id || 'unknown'] = inp.value;
+                    });
+                    return result;
                 }
             """)
+            logger.warning(f"Edit page inputs: {username}")
 
+            # Extract username from inputs dict
+            username = (username or {}).get('username') or (username or {}).get('Username')
             if not username:
-                raise Exception("Could not extract username — cookies may be expired")
+                raise Exception(f"Could not extract username — page inputs: {username}")
 
             # Get stats from profile page
             await page.goto(f"https://www.instagram.com/{username}/", wait_until="domcontentloaded", timeout=30000)
