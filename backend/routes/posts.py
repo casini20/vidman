@@ -39,13 +39,13 @@ async def _post_single(item: dict, video_path: str, caption: str) -> tuple[bool,
             platform = row["platform"] or "tiktok"
 
         if platform == "instagram" and post_instagram_video:
-            await post_instagram_video(cookies, video_path, caption)
+            await post_instagram_video(cookies, video_path, caption, run_id=pa_id[:8])
         elif platform == "instagram":
             raise Exception("Instagram posting not yet implemented")
         elif platform == "twitter":
             raise Exception("Twitter posting not yet implemented")
         else:
-            await post_video(cookies, video_path, caption, run_id=pa_id[:8])
+            await post_video(cookies, video_path, caption)
 
         async with get_db() as db:
             await db.execute(
@@ -80,13 +80,25 @@ async def _process_post(post_id: str, video_path: str, caption: str):
         )
         await db.commit()
 
-    # Stagger starts by a few seconds so they don't all hit the platform at once
-    async def _staggered(item, index):
-        await asyncio.sleep(index * 3)
-        return await _post_single(item, video_path, caption)
+    # TikTok: staggered concurrent. Instagram: sequential (rate limit sensitive).
+    ig_semaphore = asyncio.Semaphore(1)
+
+    async def _run(item, index):
+        async with get_db() as db:
+            cursor = await db.execute("SELECT platform FROM accounts WHERE id=?", (item["account_id"],))
+            row = await cursor.fetchone()
+            platform = row["platform"] if row else "tiktok"
+
+        if platform == "instagram":
+            async with ig_semaphore:
+                await asyncio.sleep(2)
+                return await _post_single(item, video_path, caption)
+        else:
+            await asyncio.sleep(index * 3)
+            return await _post_single(item, video_path, caption)
 
     results = await asyncio.gather(
-        *[_staggered(item, i) for i, item in enumerate(items)],
+        *[_run(item, i) for i, item in enumerate(items)],
         return_exceptions=False,
     )
 

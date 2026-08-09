@@ -74,7 +74,7 @@ USER_AGENT = (
 )
 
 
-async def post_instagram_video(cookies: list, video_path: str, caption: str) -> dict:
+async def post_instagram_video(cookies: list, video_path: str, caption: str, run_id: str = "") -> dict:
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:
@@ -94,7 +94,7 @@ async def post_instagram_video(cookies: list, video_path: str, caption: str) -> 
 
             await page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(3000)
-            await page.screenshot(path="ig_home.png")
+            await page.screenshot(path=f"{run_id}_ig_home.png")
 
             # Click the Create/+ button in the nav
             create_selectors = [
@@ -119,7 +119,7 @@ async def post_instagram_video(cookies: list, video_path: str, caption: str) -> 
                 await page.goto("https://www.instagram.com/create/select/", wait_until="domcontentloaded", timeout=30000)
 
             await page.wait_for_timeout(2000)
-            await page.screenshot(path="ig_create.png")
+            await page.screenshot(path=f"{run_id}_ig_create.png")
 
             # Click "Post" from the submenu if visible
             for post_label in ["Post", "Bericht"]:
@@ -135,32 +135,28 @@ async def post_instagram_video(cookies: list, video_path: str, caption: str) -> 
                 except Exception:
                     pass
 
-            await page.screenshot(path="ig_post_modal.png")
+            await page.screenshot(path=f"{run_id}_ig_post_modal.png")
 
-            # Wait for file input or "Select from computer" button
-            try:
-                for btn_label in ["Select from computer", "Selecteer van computer", "Van computer selecteren"]:
-                    try:
-                        select_btn = page.get_by_role("button", name=btn_label)
-                        if await select_btn.is_visible(timeout=3000):
-                            async with page.expect_file_chooser(timeout=5000) as fc_info:
-                                await select_btn.click()
-                            file_chooser = await fc_info.value
-                            await file_chooser.set_files(video_path)
-                            logger.info(f"Instagram file set via file chooser: {btn_label}")
-                            await page.wait_for_timeout(3000)
-                            break
-                    except Exception:
-                        pass
-                else:
-                    # Fallback: direct file input
-                    file_input = page.locator('input[type="file"]').first
-                    await file_input.set_input_files(video_path)
-                    logger.info("Instagram file set via direct input")
-                    await page.wait_for_timeout(3000)
-            except Exception as e:
-                raise Exception(f"Could not upload file to Instagram: {e}")
-            await page.screenshot(path="ig_after_upload.png")
+            # Wait for file upload button
+            file_uploaded = False
+            for btn_label in ["Select from computer", "Selecteer van computer", "Van computer selecteren"]:
+                try:
+                    select_btn = page.get_by_role("button", name=btn_label)
+                    if await select_btn.is_visible(timeout=5000):
+                        async with page.expect_file_chooser(timeout=10000) as fc_info:
+                            await select_btn.click()
+                        file_chooser = await fc_info.value
+                        await file_chooser.set_files(video_path)
+                        logger.info(f"Instagram file set via file chooser: {btn_label}")
+                        await page.wait_for_timeout(3000)
+                        file_uploaded = True
+                        break
+                except Exception as e:
+                    logger.warning(f"File chooser attempt failed for '{btn_label}': {e}")
+            if not file_uploaded:
+                await page.screenshot(path=f"{run_id}_ig_no_upload_btn.png")
+                raise Exception("Could not find Instagram file upload button")
+            await page.screenshot(path=f"{run_id}_ig_after_upload.png")
 
             # Dismiss "Video posts are now shared as reels" popup
             try:
@@ -195,12 +191,12 @@ async def post_instagram_video(cookies: list, video_path: str, caption: str) -> 
             await page.wait_for_timeout(2000)
             await click_top_right_button(["Next", "Volgende"])
             await page.wait_for_timeout(2000)
-            await page.screenshot(path="ig_step2.png")
+            await page.screenshot(path=f"{run_id}_ig_step2.png")
 
             # Step 2: Edit → Next
             await click_top_right_button(["Next", "Volgende"])
             await page.wait_for_timeout(2000)
-            await page.screenshot(path="ig_caption.png")
+            await page.screenshot(path=f"{run_id}_ig_caption.png")
 
             # Step 3: Caption
             try:
@@ -228,7 +224,7 @@ async def post_instagram_video(cookies: list, video_path: str, caption: str) -> 
                 except Exception:
                     break
 
-            await page.screenshot(path="ig_after_share.png")
+            await page.screenshot(path=f"{run_id}_ig_after_share.png")
             await browser.close()
             return {"success": True}
 
