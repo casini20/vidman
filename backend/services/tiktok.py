@@ -97,27 +97,38 @@ async def get_account_info(cookies: list) -> dict:
                         else:
                             logger.warning(f"Stats DOM elements not found for {username}, got={stats}")
 
-                        # Fetch all video view counts by paginating the user video list
+                        # Fetch all video view counts — extract secUid from page then paginate
                         total_views = 0
                         try:
                             total_views = await pg.evaluate("""
                                 async () => {
+                                    // Extract secUid from page data
+                                    let secUid = '';
+                                    try {
+                                        const data = window.__UNIVERSAL_DATA_FOR_REHYDRATION__;
+                                        const scope = data && data.__DEFAULT_SCOPE__;
+                                        const detail = scope && (scope['webapp.user-detail'] || {});
+                                        secUid = (detail.userInfo && detail.userInfo.user && detail.userInfo.user.secUid) || '';
+                                    } catch(e) {}
+
+                                    if (!secUid) return 0;
+
                                     let cursor = 0;
                                     let hasMore = true;
                                     let totalViews = 0;
                                     while (hasMore) {
-                                        const resp = await fetch(`/api/post/item_list/?aid=1988&count=30&cursor=${cursor}&secUid=&userId=&sourceType=8`, {
-                                            credentials: 'include',
-                                            headers: { 'Content-Type': 'application/json' }
-                                        });
-                                        const data = await resp.json();
+                                        const url = `https://www.tiktok.com/api/post/item_list/?aid=1988&count=30&cursor=${cursor}&secUid=${secUid}&sourceType=8`;
+                                        const resp = await fetch(url, { credentials: 'include' });
+                                        const text = await resp.text();
+                                        if (!text) break;
+                                        const data = JSON.parse(text);
                                         const items = data.itemList || [];
                                         items.forEach(item => {
                                             totalViews += (item.stats && item.stats.playCount) || 0;
                                         });
                                         hasMore = data.hasMore === true && items.length > 0;
                                         cursor = data.cursor || 0;
-                                        if (!hasMore || cursor === 0) break;
+                                        if (!hasMore) break;
                                     }
                                     return totalViews;
                                 }
