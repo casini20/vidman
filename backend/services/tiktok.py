@@ -89,7 +89,6 @@ async def get_account_info(cookies: list) -> dict:
                                 };
                             }
                         """)
-                        await browser.close()
                         if stats and stats.get("followers") is not None:
                             followers = stats.get("followers") or "0"
                             following = stats.get("following") or "0"
@@ -97,6 +96,38 @@ async def get_account_info(cookies: list) -> dict:
                             logger.info(f"Stats scraped for {username}: followers={followers} following={following} likes={likes}")
                         else:
                             logger.warning(f"Stats DOM elements not found for {username}, got={stats}")
+
+                        # Fetch all video view counts by paginating the user video list
+                        total_views = 0
+                        try:
+                            total_views = await pg.evaluate("""
+                                async () => {
+                                    let cursor = 0;
+                                    let hasMore = true;
+                                    let totalViews = 0;
+                                    while (hasMore) {
+                                        const resp = await fetch(`/api/post/item_list/?aid=1988&count=30&cursor=${cursor}&secUid=&userId=&sourceType=8`, {
+                                            credentials: 'include',
+                                            headers: { 'Content-Type': 'application/json' }
+                                        });
+                                        const data = await resp.json();
+                                        const items = data.itemList || [];
+                                        items.forEach(item => {
+                                            totalViews += (item.stats && item.stats.playCount) || 0;
+                                        });
+                                        hasMore = data.hasMore === true && items.length > 0;
+                                        cursor = data.cursor || 0;
+                                        if (!hasMore || cursor === 0) break;
+                                    }
+                                    return totalViews;
+                                }
+                            """)
+                            logger.info(f"TikTok total views for {username}: {total_views}")
+                        except Exception as ve:
+                            logger.warning(f"Could not fetch TikTok views: {ve}")
+
+                        views = str(total_views)
+                        await browser.close()
                 except Exception as e:
                     logger.warning(f"Could not fetch user stats: {e}")
                 return {
