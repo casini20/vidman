@@ -159,9 +159,7 @@ async def post_instagram_video(cookies: list, video_path: str, caption: str) -> 
                     logger.info("Instagram file set via direct input")
                     await page.wait_for_timeout(3000)
             except Exception as e:
-                logger.warning(f"Instagram file input error: {e}")
-            logger.info("Instagram file set")
-            await page.wait_for_timeout(3000)
+                raise Exception(f"Could not upload file to Instagram: {e}")
             await page.screenshot(path="ig_after_upload.png")
 
             # Dismiss "Video posts are now shared as reels" popup
