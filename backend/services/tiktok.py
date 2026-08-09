@@ -111,7 +111,7 @@ async def get_account_info(cookies: list) -> dict:
                                         secUid = (detail.userInfo && detail.userInfo.user && detail.userInfo.user.secUid) || '';
                                     } catch(e) {}
 
-                                    if (!secUid) return 0;
+                                    if (!secUid) return 'NO_SECUID';
 
                                     let cursor = 0;
                                     let hasMore = true;
@@ -133,7 +133,7 @@ async def get_account_info(cookies: list) -> dict:
                                     return totalViews;
                                 }
                             """)
-                            logger.info(f"TikTok total views for {username}: {total_views}")
+                            logger.warning(f"TikTok views result for {username}: {total_views}")
                         except Exception as ve:
                             logger.warning(f"Could not fetch TikTok views: {ve}")
 
