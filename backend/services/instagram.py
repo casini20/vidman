@@ -1,5 +1,4 @@
 import logging
-from urllib.parse import unquote
 
 logger = logging.getLogger(__name__)
 
@@ -13,32 +12,120 @@ def get_cookie_value(cookies: list, name: str) -> str:
 
 async def get_instagram_account_info(cookies: list) -> dict:
     session_id = get_cookie_value(cookies, "sessionid")
-    ds_user_id = get_cookie_value(cookies, "ds_user_id")
-
     if not session_id:
         raise Exception("No sessionid cookie found — please re-export your Instagram cookies")
 
-    # Extract user_id from ds_user_id or from sessionid prefix
-    user_id = ds_user_id
-    if not user_id and session_id:
-        # sessionid format: "46940659139%3Axxx" — user_id is before the first %3A
-        decoded = unquote(session_id)
-        user_id = decoded.split(":")[0]
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox"]
+        )
+        context = await browser.new_context(user_agent=USER_AGENT)
+        await context.add_cookies(normalize_cookies(cookies))
+        page = await context.new_page()
 
-    if not user_id:
-        raise Exception("Could not extract user ID from cookies")
+        try:
+            # Get username from edit page
+            await page.goto("https://www.instagram.com/accounts/edit/", wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(3000)
 
-    # Use user_id as username placeholder — will be shown as @{user_id} until synced
-    logger.info(f"Instagram session accepted for user_id={user_id}")
-    return {
-        "username": f"ig_{user_id}",
-        "display_name": f"Instagram {user_id}",
-        "avatar_url": "",
-        "followers": "0",
-        "following": "0",
-        "likes": "0",
-        "views": "0",
-    }
+            username = await page.evaluate("""
+                () => {
+                    const inputs = document.querySelectorAll('input');
+                    for (const inp of inputs) {
+                        const name = (inp.getAttribute('name') || '').toLowerCase();
+                        if (name === 'username') return inp.value;
+                    }
+                    return null;
+                }
+            """)
+
+            if not username:
+                raise Exception("Could not extract username — cookies may be expired")
+
+            # Get stats from profile page
+            await page.goto(f"https://www.instagram.com/{username}/", wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(3000)
+
+            stats = await page.evaluate("""
+                () => {
+                    const counts = document.querySelectorAll('span[class*="x5n08af"]');
+                    const headers = document.querySelectorAll('span[class*="xdj266r"]');
+                    // Try meta description first
+                    const desc = document.querySelector('meta[name="description"]');
+                    if (desc) return { desc: desc.content };
+                    // Try structured data
+                    const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+                    for (const s of scripts) {
+                        try {
+                            const d = JSON.parse(s.textContent);
+                            if (d.interactionStatistic) return { ld: d };
+                        } catch {}
+                    }
+                    // Try stat list items
+                    const lis = document.querySelectorAll('li');
+                    const result = {};
+                    lis.forEach(li => {
+                        const text = li.innerText || '';
+                        if (text.includes('follower')) result.followers = text.replace(/[^0-9.,KMB]/gi, '').trim();
+                        if (text.includes('following')) result.following = text.replace(/[^0-9.,KMB]/gi, '').trim();
+                        if (text.includes('post')) result.posts = text.replace(/[^0-9.,KMB]/gi, '').trim();
+                    });
+                    return result;
+                }
+            """)
+
+            logger.info(f"Instagram stats for {username}: {stats}")
+
+            followers = "0"
+            following = "0"
+            posts = "0"
+
+            if stats:
+                if stats.get("desc"):
+                    # Parse "X Followers, Y Following, Z Posts" from meta description
+                    import re
+                    desc = stats["desc"]
+                    fm = re.search(r"([\d,]+)\s*Followers", desc, re.I)
+                    fgm = re.search(r"([\d,]+)\s*Following", desc, re.I)
+                    pm = re.search(r"([\d,]+)\s*Posts", desc, re.I)
+                    if fm: followers = fm.group(1).replace(",", "")
+                    if fgm: following = fgm.group(1).replace(",", "")
+                    if pm: posts = pm.group(1).replace(",", "")
+                elif stats.get("ld"):
+                    for stat in stats["ld"].get("interactionStatistic", []):
+                        t = stat.get("interactionType", "")
+                        v = str(stat.get("userInteractionCount", "0"))
+                        if "Follow" in t: followers = v
+                else:
+                    followers = stats.get("followers", "0") or "0"
+                    following = stats.get("following", "0") or "0"
+                    posts = stats.get("posts", "0") or "0"
+
+            # Get avatar from profile page
+            avatar_url = await page.evaluate("""
+                () => {
+                    const img = document.querySelector('img[alt*="profile picture"], img[alt*="profiel"]');
+                    return img ? img.src : '';
+                }
+            """)
+
+            await browser.close()
+            return {
+                "username": username,
+                "display_name": username,
+                "avatar_url": avatar_url or "",
+                "followers": followers,
+                "following": following,
+                "likes": posts,
+                "views": "0",
+            }
+
+        except Exception as e:
+            await browser.close()
+            logger.error(f"Instagram get_account_info error: {e}", exc_info=True)
+            raise Exception(f"Could not verify Instagram session: {e}")
 
 
 SAMESITE_MAP = {
