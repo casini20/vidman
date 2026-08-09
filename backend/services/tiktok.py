@@ -195,14 +195,14 @@ async def click_post_button(page) -> bool:
         except Exception:
             pass
     await page.wait_for_timeout(1000)
-    await page.screenshot(path=f"{scrolled_down}{run_id}.png")
+    await page.screenshot(path=f"{run_id}_scrolled_down.png")
 
     # Coordinate click first — we know exactly where the Post button is
     try:
         await page.mouse.click(213, 699)
         logger.info("Clicked Post button via coordinates (213, 699)")
         await page.wait_for_timeout(1000)
-        await page.screenshot(path=f"{after_coord_click}{run_id}.png")
+        await page.screenshot(path=f"{run_id}_after_coord_click.png")
         return True
     except Exception as e:
         logger.info(f"Coordinate click failed: {e}")
@@ -304,7 +304,7 @@ async def post_video(cookies: list, video_path: str, caption: str, run_id: str =
             await page.wait_for_timeout(5000)
             logger.info(f"Upload page URL: {page.url}")
 
-            await page.screenshot(path=f"{upload_page}{run_id}.png")
+            await page.screenshot(path=f"{run_id}_upload_page.png")
 
             frames = page.frames
             file_input = page.locator('input[type="file"]')
@@ -330,7 +330,7 @@ async def post_video(cookies: list, video_path: str, caption: str, run_id: str =
             for _ in range(6):  # 6 x 5 seconds = 30 seconds
                 await dismiss_popups(page)
                 await page.wait_for_timeout(5000)
-            await page.screenshot(path=f"{after_upload}{run_id}.png")
+            await page.screenshot(path=f"{run_id}_after_upload.png")
 
             # Dismiss any remaining popups
             await dismiss_popups(page)
@@ -364,12 +364,12 @@ async def post_video(cookies: list, video_path: str, caption: str, run_id: str =
             await wait_for_content_check(page, max_minutes=15)
 
             await page.wait_for_timeout(1000)
-            await page.screenshot(path=f"{before_post}{run_id}.png")
+            await page.screenshot(path=f"{run_id}_before_post.png")
 
             # Click post button
             posted = await click_post_button(page)
             if not posted:
-                await page.screenshot(path=f"{post_failed}{run_id}.png")
+                await page.screenshot(path=f"{run_id}_post_failed.png")
                 raise Exception("Could not find or click the Post button")
 
             # Handle "Post now" confirmation popup
@@ -407,7 +407,7 @@ async def post_video(cookies: list, video_path: str, caption: str, run_id: str =
                                 except Exception:
                                     pass
                         await page.wait_for_timeout(1000)
-                        await page.screenshot(path=f"{after_close_warning}{run_id}.png")
+                        await page.screenshot(path=f"{run_id}_after_close_warning.png")
                         logger.info("Screenshot saved: after_close_warning.png")
                         logger.info("Closed content warning, clicking post again...")
                         await click_post_button(page)
