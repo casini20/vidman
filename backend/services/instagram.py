@@ -35,20 +35,35 @@ async def get_instagram_account_info(cookies: list) -> dict:
 
             username = await page.evaluate("""
                 () => {
+                    // New Instagram layout: username is shown as text under the name in profile card
+                    // Try the small text under the display name
+                    const subtexts = document.querySelectorAll('span, p, div');
+                    for (const el of subtexts) {
+                        const t = (el.innerText || '').trim();
+                        // Username: short, no spaces, alphanumeric + dots + underscores
+                        if (t && t.length < 30 && /^[a-zA-Z0-9._]+$/.test(t) && !t.includes(' ')) {
+                            const parent = el.closest('a');
+                            if (parent && parent.href && parent.href.includes('instagram.com')) return t;
+                        }
+                    }
+                    // Fallback: try to find from page URL or meta
+                    const canonical = document.querySelector('link[rel="canonical"]');
+                    if (canonical) {
+                        const m = canonical.href.match(/instagram\.com\/([^/]+)\/?$/);
+                        if (m) return m[1];
+                    }
+                    // Try input fields (old layout)
                     const inputs = document.querySelectorAll('input');
-                    const result = {};
-                    inputs.forEach(inp => {
-                        result[inp.getAttribute('name') || inp.id || 'unknown'] = inp.value;
-                    });
-                    return result;
+                    for (const inp of inputs) {
+                        if ((inp.getAttribute('name') || '').toLowerCase() === 'username') return inp.value;
+                    }
+                    return null;
                 }
             """)
-            logger.warning(f"Edit page inputs: {username}")
+            logger.warning(f"Extracted username: {username}")
 
-            # Extract username from inputs dict
-            username = (username or {}).get('username') or (username or {}).get('Username')
             if not username:
-                raise Exception(f"Could not extract username — page inputs: {username}")
+                raise Exception("Could not extract username from edit page")
 
             # Get stats from profile page
             await page.goto(f"https://www.instagram.com/{username}/", wait_until="domcontentloaded", timeout=30000)
