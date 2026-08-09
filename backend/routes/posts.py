@@ -45,7 +45,7 @@ async def _post_single(item: dict, video_path: str, caption: str) -> tuple[bool,
         elif platform == "twitter":
             raise Exception("Twitter posting not yet implemented")
         else:
-            await post_video(cookies, video_path, caption)
+            await post_video(cookies, video_path, caption, run_id=pa_id[:8])
 
         async with get_db() as db:
             await db.execute(
@@ -80,9 +80,13 @@ async def _process_post(post_id: str, video_path: str, caption: str):
         )
         await db.commit()
 
-    # Run all accounts concurrently
+    # Stagger starts by a few seconds so they don't all hit the platform at once
+    async def _staggered(item, index):
+        await asyncio.sleep(index * 3)
+        return await _post_single(item, video_path, caption)
+
     results = await asyncio.gather(
-        *[_post_single(item, video_path, caption) for item in items],
+        *[_staggered(item, i) for i, item in enumerate(items)],
         return_exceptions=False,
     )
 

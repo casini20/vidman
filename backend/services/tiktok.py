@@ -78,25 +78,29 @@ async def get_account_info(cookies: list) -> dict:
                         pg = await ctx.new_page()
                         await pg.goto(f"https://www.tiktok.com/@{username}", wait_until="domcontentloaded", timeout=30000)
                         await pg.wait_for_timeout(3000)
+                        await pg.wait_for_timeout(3000)
                         stats = await pg.evaluate("""
                             () => {
-                                const data = window.__UNIVERSAL_DATA_FOR_REHYDRATION__ || window.SIGI_STATE;
-                                if (!data) return null;
-                                const scope = data.__DEFAULT_SCOPE__ || data;
-                                const userDetail = scope['webapp.user-detail'] || scope['userDetail'] || {};
-                                const stats = (userDetail.userInfo || {}).stats || {};
-                                return stats;
+                                const get = (sel) => {
+                                    const el = document.querySelector(sel);
+                                    return el ? el.innerText.trim() : null;
+                                };
+                                return {
+                                    followers: get('[data-e2e="followers-count"]'),
+                                    following: get('[data-e2e="following-count"]'),
+                                    likes:     get('[data-e2e="likes-count"]'),
+                                };
                             }
                         """)
                         await browser.close()
-                        if stats and stats.get("followerCount") is not None:
-                            followers = str(stats.get("followerCount", 0))
-                            following = str(stats.get("followingCount", 0))
-                            likes = str(stats.get("heartCount", stats.get("diggCount", 0)))
-                            views = str(stats.get("videoCount", 0))
-                            logger.info(f"Stats scraped for {username}: followers={followers} following={following} likes={likes} views={views}")
+                        if stats and stats.get("followers") is not None:
+                            followers = stats.get("followers") or "0"
+                            following = stats.get("following") or "0"
+                            likes     = stats.get("likes") or "0"
+                            views     = "0"
+                            logger.info(f"Stats scraped for {username}: followers={followers} following={following} likes={likes}")
                         else:
-                            logger.warning(f"Stats not found in page JS for {username}, stats={stats}")
+                            logger.warning(f"Stats DOM elements not found for {username}, got={stats}")
                 except Exception as e:
                     logger.warning(f"Could not fetch user stats: {e}")
                 return {
@@ -191,14 +195,14 @@ async def click_post_button(page) -> bool:
         except Exception:
             pass
     await page.wait_for_timeout(1000)
-    await page.screenshot(path="scrolled_down.png")
+    await page.screenshot(path=f"{scrolled_down}{run_id}.png")
 
     # Coordinate click first — we know exactly where the Post button is
     try:
         await page.mouse.click(213, 699)
         logger.info("Clicked Post button via coordinates (213, 699)")
         await page.wait_for_timeout(1000)
-        await page.screenshot(path="after_coord_click.png")
+        await page.screenshot(path=f"{after_coord_click}{run_id}.png")
         return True
     except Exception as e:
         logger.info(f"Coordinate click failed: {e}")
@@ -267,7 +271,7 @@ async def handle_post_confirmation(page):
             pass
 
 
-async def post_video(cookies: list, video_path: str, caption: str) -> dict:
+async def post_video(cookies: list, video_path: str, caption: str, run_id: str = "") -> dict:
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:
@@ -300,7 +304,7 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             await page.wait_for_timeout(5000)
             logger.info(f"Upload page URL: {page.url}")
 
-            await page.screenshot(path="upload_page.png")
+            await page.screenshot(path=f"{upload_page}{run_id}.png")
 
             frames = page.frames
             file_input = page.locator('input[type="file"]')
@@ -326,7 +330,7 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             for _ in range(6):  # 6 x 5 seconds = 30 seconds
                 await dismiss_popups(page)
                 await page.wait_for_timeout(5000)
-            await page.screenshot(path="after_upload.png")
+            await page.screenshot(path=f"{after_upload}{run_id}.png")
 
             # Dismiss any remaining popups
             await dismiss_popups(page)
@@ -360,12 +364,12 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
             await wait_for_content_check(page, max_minutes=15)
 
             await page.wait_for_timeout(1000)
-            await page.screenshot(path="before_post.png")
+            await page.screenshot(path=f"{before_post}{run_id}.png")
 
             # Click post button
             posted = await click_post_button(page)
             if not posted:
-                await page.screenshot(path="post_failed.png")
+                await page.screenshot(path=f"{post_failed}{run_id}.png")
                 raise Exception("Could not find or click the Post button")
 
             # Handle "Post now" confirmation popup
@@ -403,7 +407,7 @@ async def post_video(cookies: list, video_path: str, caption: str) -> dict:
                                 except Exception:
                                     pass
                         await page.wait_for_timeout(1000)
-                        await page.screenshot(path="after_close_warning.png")
+                        await page.screenshot(path=f"{after_close_warning}{run_id}.png")
                         logger.info("Screenshot saved: after_close_warning.png")
                         logger.info("Closed content warning, clicking post again...")
                         await click_post_button(page)
