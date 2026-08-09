@@ -63,12 +63,10 @@ async def get_account_info(cookies: list) -> dict:
             display_name = user_data.get("nickname", username)
             avatar_url = user_data.get("avatar_url", "")
             if username:
-                # Fetch real stats by scraping the profile page
                 followers = "0"
                 following = "0"
                 likes = "0"
                 views = "0"
-                # Fetch real stats using Playwright (httpx gets bot-blocked)
                 try:
                     from playwright.async_api import async_playwright
                     async with async_playwright() as pw:
@@ -77,7 +75,6 @@ async def get_account_info(cookies: list) -> dict:
                         await ctx.add_cookies(normalize_cookies(cookies))
                         pg = await ctx.new_page()
                         await pg.goto(f"https://www.tiktok.com/@{username}", wait_until="domcontentloaded", timeout=30000)
-                        await pg.wait_for_timeout(3000)
                         await pg.wait_for_timeout(3000)
                         stats = await pg.evaluate("""
                             () => {
@@ -97,7 +94,6 @@ async def get_account_info(cookies: list) -> dict:
                             followers = stats.get("followers") or "0"
                             following = stats.get("following") or "0"
                             likes     = stats.get("likes") or "0"
-                            views     = "0"
                             logger.info(f"Stats scraped for {username}: followers={followers} following={following} likes={likes}")
                         else:
                             logger.warning(f"Stats DOM elements not found for {username}, got={stats}")
@@ -119,7 +115,6 @@ async def get_account_info(cookies: list) -> dict:
 
 
 async def dismiss_popups(page):
-    """Dismiss any visible popups."""
     for btn_text in ["Got it", "Turn on", "Skip", "Close"]:
         try:
             btn = page.get_by_role("button", name=btn_text)
@@ -132,17 +127,13 @@ async def dismiss_popups(page):
 
 
 async def wait_for_content_check(page, max_minutes: int = 15):
-    """Poll until content check is done, up to max_minutes.
-    Done = 'Checking in progress' text gone OR Post button is enabled.
-    """
     checking_texts = [
         "Checking in progress",
-        "Checking in uitvoering",  # Dutch
-        "Checking in",  # partial match fallback
+        "Checking in uitvoering",
+        "Checking in",
     ]
-    max_iterations = max_minutes * 6  # check every 10 seconds
+    max_iterations = max_minutes * 6
     for i in range(max_iterations):
-        # Done signal 1: Post button is enabled
         try:
             post_btn = page.locator('button:has-text("Post"), button:has-text("Plaatsen")').first
             if await post_btn.is_enabled(timeout=1000):
@@ -151,7 +142,6 @@ async def wait_for_content_check(page, max_minutes: int = 15):
         except Exception:
             pass
 
-        # Done signal 2: none of the "checking" strings visible
         still_checking = False
         for text in checking_texts:
             try:
@@ -165,18 +155,15 @@ async def wait_for_content_check(page, max_minutes: int = 15):
             logger.info(f"Content check done — checking text gone after ~{i * 10}s")
             return
 
-        elapsed = i * 10
-        logger.info(f"Content check still running... ({elapsed}s elapsed)")
+        logger.info(f"Content check still running... ({i * 10}s elapsed)")
         await dismiss_popups(page)
         await page.wait_for_timeout(10000)
     logger.info(f"Content check timed out after {max_minutes} minutes, proceeding anyway")
 
 
-async def click_post_button(page) -> bool:
-    """Try to click the Post/Plaatsen button."""
+async def click_post_button(page, run_id: str = "") -> bool:
     all_frames = [page] + list(page.frames)
 
-    # Scroll every frame - target both window and any scrollable container divs
     for frame in all_frames:
         try:
             await frame.evaluate("""
@@ -197,7 +184,6 @@ async def click_post_button(page) -> bool:
     await page.wait_for_timeout(1000)
     await page.screenshot(path=f"{run_id}_scrolled_down.png")
 
-    # Coordinate click first — we know exactly where the Post button is
     try:
         await page.mouse.click(213, 699)
         logger.info("Clicked Post button via coordinates (213, 699)")
@@ -207,7 +193,6 @@ async def click_post_button(page) -> bool:
     except Exception as e:
         logger.info(f"Coordinate click failed: {e}")
 
-    # Selector fallback
     post_selectors = [
         'button:has-text("Plaatsen")',
         'button:has-text("Post")',
@@ -230,7 +215,6 @@ async def click_post_button(page) -> bool:
             except Exception:
                 pass
 
-    # JS fallback: scan all frames for a matching button by text
     for frame in all_frames:
         try:
             clicked = await frame.evaluate("""
@@ -258,7 +242,6 @@ async def click_post_button(page) -> bool:
 
 
 async def handle_post_confirmation(page):
-    """Handle the 'Post now' confirmation popup."""
     await page.wait_for_timeout(2000)
     for btn_text in ["Nu plaatsen", "Post now", "Confirm", "Continue"]:
         try:
@@ -326,18 +309,15 @@ async def post_video(cookies: list, video_path: str, caption: str, run_id: str =
                 else:
                     raise Exception("Could not find file input on any frame")
 
-            # Wait for video to upload while dismissing popups
-            for _ in range(6):  # 6 x 5 seconds = 30 seconds
+            for _ in range(6):
                 await dismiss_popups(page)
                 await page.wait_for_timeout(5000)
             await page.screenshot(path=f"{run_id}_after_upload.png")
 
-            # Dismiss any remaining popups
             await dismiss_popups(page)
             await page.wait_for_timeout(1000)
             await dismiss_popups(page)
 
-            # Caption
             caption_selectors = [
                 '.public-DraftEditor-content',
                 '[contenteditable="true"]',
@@ -357,7 +337,6 @@ async def post_video(cookies: list, video_path: str, caption: str, run_id: str =
                     except Exception:
                         pass
 
-            # Short stabilisation wait, then poll until content check is done
             logger.info("Waiting for content check to complete...")
             await dismiss_popups(page)
             await page.wait_for_timeout(10000)
@@ -366,16 +345,13 @@ async def post_video(cookies: list, video_path: str, caption: str, run_id: str =
             await page.wait_for_timeout(1000)
             await page.screenshot(path=f"{run_id}_before_post.png")
 
-            # Click post button
-            posted = await click_post_button(page)
+            posted = await click_post_button(page, run_id=run_id)
             if not posted:
                 await page.screenshot(path=f"{run_id}_post_failed.png")
                 raise Exception("Could not find or click the Post button")
 
-            # Handle "Post now" confirmation popup
             await handle_post_confirmation(page)
 
-            # Handle "Content may be restricted/limited" warning popup
             await page.wait_for_timeout(2000)
             warning_strings = [
                 "Content may be restricted",
@@ -386,13 +362,11 @@ async def post_video(cookies: list, video_path: str, caption: str, run_id: str =
                 try:
                     if await page.locator(f'text="{text}"').is_visible(timeout=2000):
                         logger.info(f"Content warning popup detected: {text}, closing...")
-                        # Coordinate click first — X is at (~957, 93)
                         try:
                             await page.mouse.click(957, 93)
                             logger.info("Closed modal via coordinate click on X (957, 93)")
                         except Exception as e:
                             logger.info(f"Coordinate X click failed: {e}")
-                            # Fallback to selectors
                             for close_sel in [
                                 '[data-e2e="modal-close-button"]',
                                 'button[class*="close"]',
@@ -408,9 +382,7 @@ async def post_video(cookies: list, video_path: str, caption: str, run_id: str =
                                     pass
                         await page.wait_for_timeout(1000)
                         await page.screenshot(path=f"{run_id}_after_close_warning.png")
-                        logger.info("Screenshot saved: after_close_warning.png")
-                        logger.info("Closed content warning, clicking post again...")
-                        await click_post_button(page)
+                        await click_post_button(page, run_id=run_id)
                         await handle_post_confirmation(page)
                         break
                 except Exception:
