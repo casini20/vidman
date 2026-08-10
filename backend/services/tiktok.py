@@ -74,8 +74,23 @@ async def get_account_info(cookies: list) -> dict:
                         ctx = await browser.new_context(user_agent=USER_AGENT)
                         await ctx.add_cookies(normalize_cookies(cookies))
                         pg = await ctx.new_page()
-                        await pg.goto(f"https://www.tiktok.com/@{username}", wait_until="domcontentloaded", timeout=30000)
-                        await pg.wait_for_timeout(3000)
+                        sec_uid_holder = {}
+                        async def capture_sec_uid(response):
+                            try:
+                                if "user/detail" in response.url:
+                                    body = await response.json()
+                                    sec_uid = (
+                                        body.get("userInfo", {}).get("user", {}).get("secUid") or
+                                        body.get("data", {}).get("user", {}).get("secUid")
+                                    )
+                                    if sec_uid:
+                                        sec_uid_holder["secUid"] = sec_uid
+                            except Exception:
+                                pass
+                        pg.on("response", capture_sec_uid)
+
+                        await pg.goto(f"https://www.tiktok.com/@{username}", wait_until="networkidle", timeout=30000)
+                        await pg.wait_for_timeout(2000)
                         stats = await pg.evaluate("""
                             () => {
                                 const get = (sel) => {
@@ -97,52 +112,38 @@ async def get_account_info(cookies: list) -> dict:
                         else:
                             logger.warning(f"Stats DOM elements not found for {username}, got={stats}")
 
-                        print(f'>>> VIEWS FETCH START for {username}', flush=True)
-                        # Fetch all video view counts — extract secUid from page then paginate
+                        # Extract secUid from captured network responses
+                        sec_uid = sec_uid_holder.get("secUid", "")
+                        print(f">>> secUid: {sec_uid}", flush=True)
+
                         total_views = 0
-                        try:
-                            total_views = await pg.evaluate("""
-                                async () => {
-                                    // Extract secUid from page data
-                                    let secUid = '';
-                                    try {
-                                        const data = window.__UNIVERSAL_DATA_FOR_REHYDRATION__;
-                                        const scope = data && data.__DEFAULT_SCOPE__;
-                                        if (!scope) return 'NO_SCOPE';
-                                        const keys = Object.keys(scope);
-                                        // Find the user detail key
-                                        const detailKey = keys.find(k => k.includes('user'));
-                                        if (!detailKey) return 'KEYS:' + keys.join(',');
-                                        const detail = scope[detailKey] || {};
-                                        secUid = (detail.userInfo && detail.userInfo.user && detail.userInfo.user.secUid) || '';
-                                        if (!secUid) return 'DETAIL_KEYS:' + Object.keys(detail).join(',');
-                                    } catch(e) { return 'ERROR:' + e.toString(); }
-
-                                    if (!secUid) return 'NO_SECUID';
-
-                                    let cursor = 0;
-                                    let hasMore = true;
-                                    let totalViews = 0;
-                                    while (hasMore) {
-                                        const url = `https://www.tiktok.com/api/post/item_list/?aid=1988&count=30&cursor=${cursor}&secUid=${secUid}&sourceType=8`;
-                                        const resp = await fetch(url, { credentials: 'include' });
-                                        const text = await resp.text();
-                                        if (!text) break;
-                                        const data = JSON.parse(text);
-                                        const items = data.itemList || [];
-                                        items.forEach(item => {
-                                            totalViews += (item.stats && item.stats.playCount) || 0;
-                                        });
-                                        hasMore = data.hasMore === true && items.length > 0;
-                                        cursor = data.cursor || 0;
-                                        if (!hasMore) break;
+                        if sec_uid:
+                            try:
+                                total_views = await pg.evaluate("""
+                                    async (secUid) => {
+                                        let cursor = 0;
+                                        let hasMore = true;
+                                        let totalViews = 0;
+                                        while (hasMore) {
+                                            const url = `https://www.tiktok.com/api/post/item_list/?aid=1988&count=30&cursor=${cursor}&secUid=${secUid}&sourceType=8`;
+                                            const resp = await fetch(url, { credentials: 'include' });
+                                            const text = await resp.text();
+                                            if (!text) break;
+                                            const data = JSON.parse(text);
+                                            const items = data.itemList || [];
+                                            items.forEach(item => {
+                                                totalViews += (item.stats && item.stats.playCount) || 0;
+                                            });
+                                            hasMore = data.hasMore === true && items.length > 0;
+                                            cursor = data.cursor || 0;
+                                            if (!hasMore) break;
+                                        }
+                                        return totalViews;
                                     }
-                                    return totalViews;
-                                }
-                            """)
-                            print(f">>> VIEWS RESULT for {username}: {total_views}", flush=True)
-                        except Exception as ve:
-                            logger.warning(f"Could not fetch TikTok views: {ve}")
+                                """, sec_uid)
+                                print(f">>> VIEWS: {total_views}", flush=True)
+                            except Exception as ve:
+                                print(f">>> VIEWS ERROR: {ve}", flush=True)
 
                         views = str(total_views)
                         await browser.close()
