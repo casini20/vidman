@@ -108,13 +108,14 @@ async def get_account_info(cookies: list) -> dict:
                                     try {
                                         const data = window.__UNIVERSAL_DATA_FOR_REHYDRATION__;
                                         const scope = data && data.__DEFAULT_SCOPE__;
-                                        const detail = scope && (scope['webapp.user-detail'] || {});
+                                        if (!scope) return 'NO_SCOPE';
+                                        const keys = Object.keys(scope);
+                                        // Find the user detail key
+                                        const detailKey = keys.find(k => k.includes('user'));
+                                        if (!detailKey) return 'KEYS:' + keys.join(',');
+                                        const detail = scope[detailKey] || {};
                                         secUid = (detail.userInfo && detail.userInfo.user && detail.userInfo.user.secUid) || '';
-                                        if (!secUid) {
-                                            // Try other paths
-                                            const keys = scope ? Object.keys(scope) : [];
-                                            return 'SCOPE_KEYS:' + keys.join(',');
-                                        }
+                                        if (!secUid) return 'DETAIL_KEYS:' + Object.keys(detail).join(',');
                                     } catch(e) { return 'ERROR:' + e.toString(); }
 
                                     if (!secUid) return 'NO_SECUID';
