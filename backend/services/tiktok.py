@@ -97,6 +97,7 @@ async def get_account_info(cookies: list) -> dict:
                         else:
                             logger.warning(f"Stats DOM elements not found for {username}, got={stats}")
 
+                        print(f'>>> VIEWS FETCH START for {username}', flush=True)
                         # Fetch all video view counts — extract secUid from page then paginate
                         total_views = 0
                         try:
@@ -133,13 +134,14 @@ async def get_account_info(cookies: list) -> dict:
                                     return totalViews;
                                 }
                             """)
-                            logger.warning(f"TikTok views result for {username}: {total_views}")
+                            print(f">>> VIEWS RESULT for {username}: {total_views}", flush=True)
                         except Exception as ve:
                             logger.warning(f"Could not fetch TikTok views: {ve}")
 
                         views = str(total_views)
                         await browser.close()
                 except Exception as e:
+                    print(f">>> STATS EXCEPTION for {username}: {e}", flush=True)
                     logger.warning(f"Could not fetch user stats: {e}")
                 return {
                     "username": username,
