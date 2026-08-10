@@ -140,29 +140,62 @@ async def get_account_info(cookies: list) -> dict:
                         total_views = 0
                         if sec_uid:
                             try:
-                                total_views = await pg.evaluate("""
+                                views_result = await pg.evaluate("""
                                     async (secUid) => {
+                                        const getCookie = (name) => {
+                                            const m = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+                                            return m ? m[2] : '';
+                                        };
+                                        const msToken = getCookie('msToken');
+
                                         let cursor = 0;
                                         let hasMore = true;
                                         let totalViews = 0;
-                                        while (hasMore) {
-                                            const url = `https://www.tiktok.com/api/post/item_list/?aid=1988&count=30&cursor=${cursor}&secUid=${secUid}&sourceType=8`;
-                                            const resp = await fetch(url, { credentials: 'include' });
+                                        let itemCount = 0;
+                                        let pageCount = 0;
+                                        const debugLog = [];
+
+                                        while (hasMore && pageCount < 50) {
+                                            const url = `https://www.tiktok.com/api/post/item_list/?aid=1988&app_language=en&app_name=tiktok_web&browser_language=en-US&browser_platform=Win32&browser_version=5.0&channel=tiktok_web&cookie_enabled=true&count=30&coverFormat=2&cursor=${cursor}&device_platform=web_pc&focus_state=true&from_page=user&history_len=3&is_fullscreen=false&is_page_visible=true&os=windows&priority_region=&referer=&region=US&screen_height=1080&screen_width=1920&secUid=${secUid}&sourceType=8&webcast_language=en&msToken=${msToken}`;
+                                            const resp = await fetch(url, {
+                                                credentials: 'include',
+                                                headers: { 'Referer': 'https://www.tiktok.com/', 'Accept': 'application/json' }
+                                            });
+                                            const status = resp.status;
                                             const text = await resp.text();
-                                            if (!text) break;
-                                            const data = JSON.parse(text);
+                                            if (!text) {
+                                                debugLog.push(`page ${pageCount}: status=${status} EMPTY BODY`);
+                                                break;
+                                            }
+                                            let data;
+                                            try {
+                                                data = JSON.parse(text);
+                                            } catch (e) {
+                                                debugLog.push(`page ${pageCount}: status=${status} PARSE ERROR body=${text.slice(0,200)}`);
+                                                break;
+                                            }
                                             const items = data.itemList || [];
+                                            itemCount += items.length;
                                             items.forEach(item => {
                                                 totalViews += (item.stats && item.stats.playCount) || 0;
                                             });
+                                            debugLog.push(`page ${pageCount}: status=${status} statusCode=${data.statusCode} items=${items.length} hasMore=${data.hasMore} cursor=${data.cursor}`);
                                             hasMore = data.hasMore === true && items.length > 0;
                                             cursor = data.cursor || 0;
+                                            pageCount += 1;
                                             if (!hasMore) break;
                                         }
-                                        return totalViews;
+                                        return { totalViews, itemCount, debugLog, msTokenFound: !!msToken };
                                     }
                                 """, sec_uid)
-                                print(f">>> VIEWS: {total_views}", flush=True)
+                                total_views = views_result.get("totalViews", 0)
+                                logger.info(
+                                    f"Views fetch for {username}: items={views_result.get('itemCount')} "
+                                    f"msTokenFound={views_result.get('msTokenFound')} log={views_result.get('debugLog')}"
+                                )
+                                print(f">>> VIEWS: {total_views} (items={views_result.get('itemCount')}, msToken={views_result.get('msTokenFound')})", flush=True)
+                                for line in views_result.get("debugLog", []):
+                                    print(f">>> VIEWS DEBUG: {line}", flush=True)
                             except Exception as ve:
                                 print(f">>> VIEWS ERROR: {ve}", flush=True)
                         else:
