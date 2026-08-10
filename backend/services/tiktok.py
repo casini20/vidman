@@ -42,6 +42,148 @@ USER_AGENT = (
 )
 
 
+_VIEWS_SCRAPE_JS = """
+    async () => {
+        const parseCount = (text) => {
+            if (!text) return 0;
+            text = text.trim().toUpperCase().replace(/,/g, '');
+            if (text.endsWith('K')) return Math.round(parseFloat(text) * 1000);
+            if (text.endsWith('M')) return Math.round(parseFloat(text) * 1000000);
+            if (text.endsWith('B')) return Math.round(parseFloat(text) * 1000000000);
+            const n = parseInt(text, 10);
+            return isNaN(n) ? 0 : n;
+        };
+        const itemSelectors = [
+            '[data-e2e="user-post-item"]',
+            '[data-e2e="user-post-item-list"] > div',
+            'div[class*="DivItemContainer"]',
+            'a[href*="/video/"]',
+        ];
+        const viewSelectors = [
+            '[data-e2e="video-views"]',
+            'strong[data-e2e="video-views"]',
+            'strong[class*="video-count"]',
+            'div[class*="video-count"]',
+            'span[class*="video-count"]',
+        ];
+
+        let lastCount = -1;
+        let stableRounds = 0;
+        for (let i = 0; i < 40; i++) {
+            window.scrollTo(0, document.body.scrollHeight);
+            await new Promise(r => setTimeout(r, 700));
+            let curCount = 0;
+            for (const s of itemSelectors) {
+                const c = document.querySelectorAll(s).length;
+                if (c > curCount) curCount = c;
+            }
+            if (curCount === lastCount) {
+                stableRounds += 1;
+                if (stableRounds >= 3) break;
+            } else {
+                stableRounds = 0;
+            }
+            lastCount = curCount;
+        }
+
+        let items = [];
+        let usedItemSelector = null;
+        for (const s of itemSelectors) {
+            const found = document.querySelectorAll(s);
+            if (found.length > items.length) {
+                items = Array.from(found);
+                usedItemSelector = s;
+            }
+        }
+
+        let usedViewSelector = null;
+        let total = 0;
+        const samples = [];
+        items.forEach((item, idx) => {
+            let text = null;
+            for (const vs of viewSelectors) {
+                const el = item.matches && item.matches(vs) ? item : item.querySelector(vs);
+                if (el && el.innerText) {
+                    text = el.innerText;
+                    if (!usedViewSelector) usedViewSelector = vs;
+                    break;
+                }
+            }
+            const count = parseCount(text);
+            total += count;
+            if (idx < 5) samples.push(text);
+        });
+
+        const bodyText = document.body.innerText.slice(0, 300);
+        const hasPrivateBadge = /private/i.test(document.body.innerText);
+        const hasNoContent = /no videos|geen video/i.test(document.body.innerText);
+        const hasCaptcha = /slider|puzzle|captcha|verify you.?re human/i.test(document.body.innerText);
+
+        return {
+            total, count: items.length, samples,
+            usedItemSelector, usedViewSelector,
+            hasPrivateBadge, hasNoContent, hasCaptcha, bodyTextSnippet: bodyText,
+        };
+    }
+"""
+
+
+async def _scrape_total_views(username: str) -> dict:
+    """Visit a TikTok profile as a logged-out visitor and sum the view counts
+    shown on each video tile. Logged-out because an authenticated + automated
+    session is more likely to trip TikTok's bot-detection captcha than a plain
+    anonymous page view, which is what this mimics."""
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(
+            headless=HEADLESS,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+            ],
+        )
+        try:
+            ctx = await browser.new_context(
+                user_agent=USER_AGENT,
+                viewport={"width": 1280, "height": 800},
+            )
+            await ctx.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+            )
+            # Intentionally NOT adding cookies here — this context stays logged out.
+            pg = await ctx.new_page()
+
+            await pg.goto(f"https://www.tiktok.com/@{username}", wait_until="domcontentloaded", timeout=30000)
+            await pg.wait_for_timeout(3000)
+            await pg.screenshot(path="tiktok_profile_before_scroll.png")
+
+            scrape_result = await pg.evaluate(_VIEWS_SCRAPE_JS)
+
+            if scrape_result.get("hasCaptcha") and scrape_result.get("count", 0) == 0:
+                print(">>> CAPTCHA DETECTED (logged-out view), waiting 8s and retrying once...", flush=True)
+                await pg.wait_for_timeout(8000)
+                await pg.screenshot(path="tiktok_profile_after_captcha_wait.png")
+                scrape_result = await pg.evaluate(_VIEWS_SCRAPE_JS)
+
+            logger.info(f"Views scrape (logged-out) for {username}: {scrape_result}")
+            print(
+                f">>> VIEWS: {scrape_result.get('total', 0)} (videos={scrape_result.get('count')}, "
+                f"itemSel={scrape_result.get('usedItemSelector')}, "
+                f"viewSel={scrape_result.get('usedViewSelector')}, "
+                f"captcha={scrape_result.get('hasCaptcha')}, "
+                f"private={scrape_result.get('hasPrivateBadge')}, "
+                f"noContent={scrape_result.get('hasNoContent')})",
+                flush=True,
+            )
+            print(f">>> VIEWS BODY SNIPPET: {scrape_result.get('bodyTextSnippet')!r}", flush=True)
+            return scrape_result
+        finally:
+            await browser.close()
+
+
 async def get_account_info(cookies: list) -> dict:
     cookie_header = cookies_to_header(cookies)
     headers = {
@@ -150,201 +292,23 @@ async def get_account_info(cookies: list) -> dict:
                                 logger.info(f"Fallback DOM stats for {username}: {stats}")
 
                         print(f">>> secUid: {sec_uid}", flush=True)
-
-                        total_views = 0
-                        try:
-                            await pg.screenshot(path="tiktok_profile_before_scroll.png")
-                            scrape_result = await pg.evaluate("""
-                                async () => {
-                                    const parseCount = (text) => {
-                                        if (!text) return 0;
-                                        text = text.trim().toUpperCase().replace(/,/g, '');
-                                        if (text.endsWith('K')) return Math.round(parseFloat(text) * 1000);
-                                        if (text.endsWith('M')) return Math.round(parseFloat(text) * 1000000);
-                                        if (text.endsWith('B')) return Math.round(parseFloat(text) * 1000000000);
-                                        const n = parseInt(text, 10);
-                                        return isNaN(n) ? 0 : n;
-                                    };
-
-                                    const itemSelectors = [
-                                        '[data-e2e="user-post-item"]',
-                                        '[data-e2e="user-post-item-list"] > div',
-                                        'div[class*="DivItemContainer"]',
-                                        'a[href*="/video/"]',
-                                    ];
-                                    const viewSelectors = [
-                                        '[data-e2e="video-views"]',
-                                        'strong[data-e2e="video-views"]',
-                                        'strong[class*="video-count"]',
-                                        'div[class*="video-count"]',
-                                        'span[class*="video-count"]',
-                                    ];
-
-                                    // Scroll to trigger lazy-loading of all video tiles
-                                    let lastCount = -1;
-                                    let stableRounds = 0;
-                                    for (let i = 0; i < 40; i++) {
-                                        window.scrollTo(0, document.body.scrollHeight);
-                                        await new Promise(r => setTimeout(r, 700));
-                                        let curCount = 0;
-                                        for (const s of itemSelectors) {
-                                            const c = document.querySelectorAll(s).length;
-                                            if (c > curCount) curCount = c;
-                                        }
-                                        if (curCount === lastCount) {
-                                            stableRounds += 1;
-                                            if (stableRounds >= 3) break;
-                                        } else {
-                                            stableRounds = 0;
-                                        }
-                                        lastCount = curCount;
-                                    }
-
-                                    let items = [];
-                                    let usedItemSelector = null;
-                                    for (const s of itemSelectors) {
-                                        const found = document.querySelectorAll(s);
-                                        if (found.length > items.length) {
-                                            items = Array.from(found);
-                                            usedItemSelector = s;
-                                        }
-                                    }
-
-                                    let usedViewSelector = null;
-                                    let total = 0;
-                                    const samples = [];
-                                    items.forEach((item, idx) => {
-                                        let text = null;
-                                        for (const vs of viewSelectors) {
-                                            const el = item.matches && item.matches(vs) ? item : item.querySelector(vs);
-                                            if (el && el.innerText) {
-                                                text = el.innerText;
-                                                if (!usedViewSelector) usedViewSelector = vs;
-                                                break;
-                                            }
-                                        }
-                                        const count = parseCount(text);
-                                        total += count;
-                                        if (idx < 5) samples.push(text);
-                                    });
-
-                                    // Extra diagnostics: page state signals
-                                    const bodyText = document.body.innerText.slice(0, 300);
-                                    const hasPrivateBadge = /private/i.test(document.body.innerText);
-                                    const hasNoContent = /no videos|geen video/i.test(document.body.innerText);
-                                    const hasCaptcha = /slider|puzzle|captcha|verify you.?re human/i.test(document.body.innerText);
-
-                                    return {
-                                        total, count: items.length, samples,
-                                        usedItemSelector, usedViewSelector,
-                                        hasPrivateBadge, hasNoContent, hasCaptcha, bodyTextSnippet: bodyText,
-                                    };
-                                }
-                            """)
-                            total_views = scrape_result.get("total", 0)
-
-                            # If TikTok showed a captcha, wait a bit and retry once —
-                            # with a visible (non-headless) browser + real cookies it
-                            # often clears on its own within a few seconds.
-                            if scrape_result.get("hasCaptcha") and scrape_result.get("count", 0) == 0:
-                                print(">>> CAPTCHA DETECTED, waiting 8s and retrying scrape once...", flush=True)
-                                await pg.wait_for_timeout(8000)
-                                await pg.screenshot(path="tiktok_profile_after_captcha_wait.png")
-                                scrape_result = await pg.evaluate("""
-                                    async () => {
-                                        const parseCount = (text) => {
-                                            if (!text) return 0;
-                                            text = text.trim().toUpperCase().replace(/,/g, '');
-                                            if (text.endsWith('K')) return Math.round(parseFloat(text) * 1000);
-                                            if (text.endsWith('M')) return Math.round(parseFloat(text) * 1000000);
-                                            if (text.endsWith('B')) return Math.round(parseFloat(text) * 1000000000);
-                                            const n = parseInt(text, 10);
-                                            return isNaN(n) ? 0 : n;
-                                        };
-                                        const itemSelectors = [
-                                            '[data-e2e="user-post-item"]',
-                                            '[data-e2e="user-post-item-list"] > div',
-                                            'div[class*="DivItemContainer"]',
-                                            'a[href*="/video/"]',
-                                        ];
-                                        const viewSelectors = [
-                                            '[data-e2e="video-views"]',
-                                            'strong[data-e2e="video-views"]',
-                                            'strong[class*="video-count"]',
-                                            'div[class*="video-count"]',
-                                            'span[class*="video-count"]',
-                                        ];
-                                        let lastCount = -1;
-                                        let stableRounds = 0;
-                                        for (let i = 0; i < 40; i++) {
-                                            window.scrollTo(0, document.body.scrollHeight);
-                                            await new Promise(r => setTimeout(r, 700));
-                                            let curCount = 0;
-                                            for (const s of itemSelectors) {
-                                                const c = document.querySelectorAll(s).length;
-                                                if (c > curCount) curCount = c;
-                                            }
-                                            if (curCount === lastCount) {
-                                                stableRounds += 1;
-                                                if (stableRounds >= 3) break;
-                                            } else {
-                                                stableRounds = 0;
-                                            }
-                                            lastCount = curCount;
-                                        }
-                                        let items = [];
-                                        let usedItemSelector = null;
-                                        for (const s of itemSelectors) {
-                                            const found = document.querySelectorAll(s);
-                                            if (found.length > items.length) {
-                                                items = Array.from(found);
-                                                usedItemSelector = s;
-                                            }
-                                        }
-                                        let usedViewSelector = null;
-                                        let total = 0;
-                                        const samples = [];
-                                        items.forEach((item, idx) => {
-                                            let text = null;
-                                            for (const vs of viewSelectors) {
-                                                const el = item.matches && item.matches(vs) ? item : item.querySelector(vs);
-                                                if (el && el.innerText) {
-                                                    text = el.innerText;
-                                                    if (!usedViewSelector) usedViewSelector = vs;
-                                                    break;
-                                                }
-                                            }
-                                            const count = parseCount(text);
-                                            total += count;
-                                            if (idx < 5) samples.push(text);
-                                        });
-                                        const bodyText = document.body.innerText.slice(0, 300);
-                                        const hasCaptcha = /slider|puzzle|captcha|verify you.?re human/i.test(document.body.innerText);
-                                        return { total, count: items.length, samples, usedItemSelector, usedViewSelector, hasCaptcha, bodyTextSnippet: bodyText };
-                                    }
-                                """)
-                                total_views = scrape_result.get("total", 0)
-
-                            logger.info(f"Views scrape debug for {username}: {scrape_result}")
-                            print(
-                                f">>> VIEWS: {total_views} (videos={scrape_result.get('count')}, "
-                                f"itemSel={scrape_result.get('usedItemSelector')}, "
-                                f"viewSel={scrape_result.get('usedViewSelector')}, "
-                                f"captcha={scrape_result.get('hasCaptcha')}, "
-                                f"private={scrape_result.get('hasPrivateBadge')}, "
-                                f"noContent={scrape_result.get('hasNoContent')})",
-                                flush=True,
-                            )
-                            print(f">>> VIEWS BODY SNIPPET: {scrape_result.get('bodyTextSnippet')!r}", flush=True)
-                        except Exception as ve:
-                            print(f">>> VIEWS ERROR: {ve}", flush=True)
-                            logger.warning(f"Could not scrape views for {username}: {ve}")
-
-                        views = str(total_views)
                         await browser.close()
                 except Exception as e:
                     print(f">>> STATS EXCEPTION for {username}: {e}", flush=True)
                     logger.warning(f"Could not fetch user stats: {e}")
+
+                # Views: use a separate logged-out browser context/session, since
+                # an anonymous profile view is far less likely to trip TikTok's
+                # captcha than doing it inside the authenticated automated session.
+                total_views = 0
+                try:
+                    scrape_result = await _scrape_total_views(username)
+                    total_views = scrape_result.get("total", 0)
+                except Exception as ve:
+                    print(f">>> VIEWS ERROR: {ve}", flush=True)
+                    logger.warning(f"Could not scrape views for {username}: {ve}")
+
+                views = str(total_views)
                 return {
                     "username": username,
                     "display_name": display_name or username,
