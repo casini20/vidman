@@ -74,46 +74,67 @@ async def get_account_info(cookies: list) -> dict:
                         ctx = await browser.new_context(user_agent=USER_AGENT)
                         await ctx.add_cookies(normalize_cookies(cookies))
                         pg = await ctx.new_page()
-                        sec_uid_holder = {}
-                        async def capture_sec_uid(response):
-                            try:
-                                if "user/detail" in response.url:
-                                    body = await response.json()
-                                    sec_uid = (
-                                        body.get("userInfo", {}).get("user", {}).get("secUid") or
-                                        body.get("data", {}).get("user", {}).get("secUid")
-                                    )
-                                    if sec_uid:
-                                        sec_uid_holder["secUid"] = sec_uid
-                            except Exception:
-                                pass
-                        pg.on("response", capture_sec_uid)
 
-                        await pg.goto(f"https://www.tiktok.com/@{username}", wait_until="networkidle", timeout=30000)
-                        await pg.wait_for_timeout(2000)
-                        stats = await pg.evaluate("""
+                        await pg.goto(f"https://www.tiktok.com/@{username}", wait_until="domcontentloaded", timeout=30000)
+                        await pg.wait_for_timeout(3000)
+
+                        # Pull avatar, secUid and stats straight out of the SSR rehydration
+                        # payload embedded in the page — TikTok often renders the profile
+                        # server-side, so the old data-e2e DOM selectors / XHR sniffing
+                        # would come back empty.
+                        page_data = await pg.evaluate("""
                             () => {
-                                const get = (sel) => {
-                                    const el = document.querySelector(sel);
-                                    return el ? el.innerText.trim() : null;
-                                };
-                                return {
-                                    followers: get('[data-e2e="followers-count"]'),
-                                    following: get('[data-e2e="following-count"]'),
-                                    likes:     get('[data-e2e="likes-count"]'),
-                                };
+                                try {
+                                    const script = document.querySelector('#__UNIVERSAL_DATA_FOR_REHYDRATION__');
+                                    if (!script) return null;
+                                    const json = JSON.parse(script.textContent);
+                                    const userDetail = json?.__DEFAULT_SCOPE__?.['webapp.user-detail'];
+                                    const user = userDetail?.userInfo?.user;
+                                    const stats = userDetail?.userInfo?.stats;
+                                    if (!user) return null;
+                                    return {
+                                        secUid: user.secUid || '',
+                                        avatarUrl: user.avatarLarger || user.avatarMedium || user.avatarThumb || '',
+                                        followers: stats?.followerCount ?? 0,
+                                        following: stats?.followingCount ?? 0,
+                                        likes: stats?.heartCount ?? 0,
+                                    };
+                                } catch (e) {
+                                    return { error: String(e) };
+                                }
                             }
                         """)
-                        if stats and stats.get("followers") is not None:
-                            followers = stats.get("followers") or "0"
-                            following = stats.get("following") or "0"
-                            likes     = stats.get("likes") or "0"
-                            logger.info(f"Stats scraped for {username}: followers={followers} following={following} likes={likes}")
-                        else:
-                            logger.warning(f"Stats DOM elements not found for {username}, got={stats}")
+                        logger.info(f"Page data for {username}: {page_data}")
 
-                        # Extract secUid from captured network responses
-                        sec_uid = sec_uid_holder.get("secUid", "")
+                        page_data = page_data or {}
+                        sec_uid = page_data.get("secUid", "")
+                        avatar_url = page_data.get("avatarUrl", "") or avatar_url
+                        followers = str(page_data.get("followers", followers))
+                        following = str(page_data.get("following", following))
+                        likes = str(page_data.get("likes", likes))
+
+                        # Fallback: try old DOM selectors in case rehydration payload
+                        # is missing/renamed but the stats are still rendered visibly.
+                        if not page_data.get("secUid") and page_data.get("followers") is None:
+                            stats = await pg.evaluate("""
+                                () => {
+                                    const get = (sel) => {
+                                        const el = document.querySelector(sel);
+                                        return el ? el.innerText.trim() : null;
+                                    };
+                                    return {
+                                        followers: get('[data-e2e="followers-count"]'),
+                                        following: get('[data-e2e="following-count"]'),
+                                        likes:     get('[data-e2e="likes-count"]'),
+                                    };
+                                }
+                            """)
+                            if stats and stats.get("followers") is not None:
+                                followers = stats.get("followers") or followers
+                                following = stats.get("following") or following
+                                likes     = stats.get("likes") or likes
+                                logger.info(f"Fallback DOM stats for {username}: {stats}")
+
                         print(f">>> secUid: {sec_uid}", flush=True)
 
                         total_views = 0
@@ -144,6 +165,8 @@ async def get_account_info(cookies: list) -> dict:
                                 print(f">>> VIEWS: {total_views}", flush=True)
                             except Exception as ve:
                                 print(f">>> VIEWS ERROR: {ve}", flush=True)
+                        else:
+                            logger.warning(f"No secUid found for {username}, skipping views fetch")
 
                         views = str(total_views)
                         await browser.close()
