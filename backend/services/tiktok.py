@@ -110,7 +110,12 @@ async def get_account_info(cookies: list) -> dict:
                                         const scope = data && data.__DEFAULT_SCOPE__;
                                         const detail = scope && (scope['webapp.user-detail'] || {});
                                         secUid = (detail.userInfo && detail.userInfo.user && detail.userInfo.user.secUid) || '';
-                                    } catch(e) {}
+                                        if (!secUid) {
+                                            // Try other paths
+                                            const keys = scope ? Object.keys(scope) : [];
+                                            return 'SCOPE_KEYS:' + keys.join(',');
+                                        }
+                                    } catch(e) { return 'ERROR:' + e.toString(); }
 
                                     if (!secUid) return 'NO_SECUID';
 
