@@ -138,68 +138,62 @@ async def get_account_info(cookies: list) -> dict:
                         print(f">>> secUid: {sec_uid}", flush=True)
 
                         total_views = 0
-                        if sec_uid:
-                            try:
-                                views_result = await pg.evaluate("""
-                                    async (secUid) => {
-                                        const getCookie = (name) => {
-                                            const m = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
-                                            return m ? m[2] : '';
-                                        };
-                                        const msToken = getCookie('msToken');
+                        try:
+                            scrape_result = await pg.evaluate("""
+                                async () => {
+                                    const parseCount = (text) => {
+                                        if (!text) return 0;
+                                        text = text.trim().toUpperCase().replace(/,/g, '');
+                                        if (text.endsWith('K')) return Math.round(parseFloat(text) * 1000);
+                                        if (text.endsWith('M')) return Math.round(parseFloat(text) * 1000000);
+                                        if (text.endsWith('B')) return Math.round(parseFloat(text) * 1000000000);
+                                        const n = parseInt(text, 10);
+                                        return isNaN(n) ? 0 : n;
+                                    };
 
-                                        let cursor = 0;
-                                        let hasMore = true;
-                                        let totalViews = 0;
-                                        let itemCount = 0;
-                                        let pageCount = 0;
-                                        const debugLog = [];
-
-                                        while (hasMore && pageCount < 50) {
-                                            const url = `https://www.tiktok.com/api/post/item_list/?aid=1988&app_language=en&app_name=tiktok_web&browser_language=en-US&browser_platform=Win32&browser_version=5.0&channel=tiktok_web&cookie_enabled=true&count=30&coverFormat=2&cursor=${cursor}&device_platform=web_pc&focus_state=true&from_page=user&history_len=3&is_fullscreen=false&is_page_visible=true&os=windows&priority_region=&referer=&region=US&screen_height=1080&screen_width=1920&secUid=${secUid}&sourceType=8&webcast_language=en&msToken=${msToken}`;
-                                            const resp = await fetch(url, {
-                                                credentials: 'include',
-                                                headers: { 'Referer': 'https://www.tiktok.com/', 'Accept': 'application/json' }
-                                            });
-                                            const status = resp.status;
-                                            const text = await resp.text();
-                                            if (!text) {
-                                                debugLog.push(`page ${pageCount}: status=${status} EMPTY BODY`);
-                                                break;
-                                            }
-                                            let data;
-                                            try {
-                                                data = JSON.parse(text);
-                                            } catch (e) {
-                                                debugLog.push(`page ${pageCount}: status=${status} PARSE ERROR body=${text.slice(0,200)}`);
-                                                break;
-                                            }
-                                            const items = data.itemList || [];
-                                            itemCount += items.length;
-                                            items.forEach(item => {
-                                                totalViews += (item.stats && item.stats.playCount) || 0;
-                                            });
-                                            debugLog.push(`page ${pageCount}: status=${status} statusCode=${data.statusCode} items=${items.length} hasMore=${data.hasMore} cursor=${data.cursor}`);
-                                            hasMore = data.hasMore === true && items.length > 0;
-                                            cursor = data.cursor || 0;
-                                            pageCount += 1;
-                                            if (!hasMore) break;
+                                    // Scroll to trigger lazy-loading of all video tiles
+                                    let lastCount = -1;
+                                    let stableRounds = 0;
+                                    for (let i = 0; i < 40; i++) {
+                                        window.scrollTo(0, document.body.scrollHeight);
+                                        await new Promise(r => setTimeout(r, 700));
+                                        const items = document.querySelectorAll('[data-e2e="user-post-item"]');
+                                        if (items.length === lastCount) {
+                                            stableRounds += 1;
+                                            if (stableRounds >= 3) break;
+                                        } else {
+                                            stableRounds = 0;
                                         }
-                                        return { totalViews, itemCount, debugLog, msTokenFound: !!msToken };
+                                        lastCount = items.length;
                                     }
-                                """, sec_uid)
-                                total_views = views_result.get("totalViews", 0)
-                                logger.info(
-                                    f"Views fetch for {username}: items={views_result.get('itemCount')} "
-                                    f"msTokenFound={views_result.get('msTokenFound')} log={views_result.get('debugLog')}"
-                                )
-                                print(f">>> VIEWS: {total_views} (items={views_result.get('itemCount')}, msToken={views_result.get('msTokenFound')})", flush=True)
-                                for line in views_result.get("debugLog", []):
-                                    print(f">>> VIEWS DEBUG: {line}", flush=True)
-                            except Exception as ve:
-                                print(f">>> VIEWS ERROR: {ve}", flush=True)
-                        else:
-                            logger.warning(f"No secUid found for {username}, skipping views fetch")
+
+                                    const items = document.querySelectorAll('[data-e2e="user-post-item"]');
+                                    let total = 0;
+                                    const samples = [];
+                                    items.forEach((item, idx) => {
+                                        const viewEl = item.querySelector('[data-e2e="video-views"], strong[data-e2e="video-views"]');
+                                        const text = viewEl ? viewEl.innerText : null;
+                                        const count = parseCount(text);
+                                        total += count;
+                                        if (idx < 5) samples.push(text);
+                                    });
+
+                                    return { total, count: items.length, samples };
+                                }
+                            """)
+                            total_views = scrape_result.get("total", 0)
+                            logger.info(
+                                f"Views scrape for {username}: videos={scrape_result.get('count')} "
+                                f"total_views={total_views} samples={scrape_result.get('samples')}"
+                            )
+                            print(
+                                f">>> VIEWS: {total_views} (videos={scrape_result.get('count')}, "
+                                f"samples={scrape_result.get('samples')})",
+                                flush=True,
+                            )
+                        except Exception as ve:
+                            print(f">>> VIEWS ERROR: {ve}", flush=True)
+                            logger.warning(f"Could not scrape views for {username}: {ve}")
 
                         views = str(total_views)
                         await browser.close()
