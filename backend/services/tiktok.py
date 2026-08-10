@@ -139,6 +139,7 @@ async def get_account_info(cookies: list) -> dict:
 
                         total_views = 0
                         try:
+                            await pg.screenshot(path="tiktok_profile_before_scroll.png")
                             scrape_result = await pg.evaluate("""
                                 async () => {
                                     const parseCount = (text) => {
@@ -151,46 +152,91 @@ async def get_account_info(cookies: list) -> dict:
                                         return isNaN(n) ? 0 : n;
                                     };
 
+                                    const itemSelectors = [
+                                        '[data-e2e="user-post-item"]',
+                                        '[data-e2e="user-post-item-list"] > div',
+                                        'div[class*="DivItemContainer"]',
+                                        'a[href*="/video/"]',
+                                    ];
+                                    const viewSelectors = [
+                                        '[data-e2e="video-views"]',
+                                        'strong[data-e2e="video-views"]',
+                                        'strong[class*="video-count"]',
+                                        'div[class*="video-count"]',
+                                        'span[class*="video-count"]',
+                                    ];
+
                                     // Scroll to trigger lazy-loading of all video tiles
                                     let lastCount = -1;
                                     let stableRounds = 0;
                                     for (let i = 0; i < 40; i++) {
                                         window.scrollTo(0, document.body.scrollHeight);
                                         await new Promise(r => setTimeout(r, 700));
-                                        const items = document.querySelectorAll('[data-e2e="user-post-item"]');
-                                        if (items.length === lastCount) {
+                                        let curCount = 0;
+                                        for (const s of itemSelectors) {
+                                            const c = document.querySelectorAll(s).length;
+                                            if (c > curCount) curCount = c;
+                                        }
+                                        if (curCount === lastCount) {
                                             stableRounds += 1;
                                             if (stableRounds >= 3) break;
                                         } else {
                                             stableRounds = 0;
                                         }
-                                        lastCount = items.length;
+                                        lastCount = curCount;
                                     }
 
-                                    const items = document.querySelectorAll('[data-e2e="user-post-item"]');
+                                    let items = [];
+                                    let usedItemSelector = null;
+                                    for (const s of itemSelectors) {
+                                        const found = document.querySelectorAll(s);
+                                        if (found.length > items.length) {
+                                            items = Array.from(found);
+                                            usedItemSelector = s;
+                                        }
+                                    }
+
+                                    let usedViewSelector = null;
                                     let total = 0;
                                     const samples = [];
                                     items.forEach((item, idx) => {
-                                        const viewEl = item.querySelector('[data-e2e="video-views"], strong[data-e2e="video-views"]');
-                                        const text = viewEl ? viewEl.innerText : null;
+                                        let text = null;
+                                        for (const vs of viewSelectors) {
+                                            const el = item.matches && item.matches(vs) ? item : item.querySelector(vs);
+                                            if (el && el.innerText) {
+                                                text = el.innerText;
+                                                if (!usedViewSelector) usedViewSelector = vs;
+                                                break;
+                                            }
+                                        }
                                         const count = parseCount(text);
                                         total += count;
                                         if (idx < 5) samples.push(text);
                                     });
 
-                                    return { total, count: items.length, samples };
+                                    // Extra diagnostics: page state signals
+                                    const bodyText = document.body.innerText.slice(0, 300);
+                                    const hasPrivateBadge = /private/i.test(document.body.innerText);
+                                    const hasNoContent = /no videos|geen video/i.test(document.body.innerText);
+
+                                    return {
+                                        total, count: items.length, samples,
+                                        usedItemSelector, usedViewSelector,
+                                        hasPrivateBadge, hasNoContent, bodyTextSnippet: bodyText,
+                                    };
                                 }
                             """)
                             total_views = scrape_result.get("total", 0)
-                            logger.info(
-                                f"Views scrape for {username}: videos={scrape_result.get('count')} "
-                                f"total_views={total_views} samples={scrape_result.get('samples')}"
-                            )
+                            logger.info(f"Views scrape debug for {username}: {scrape_result}")
                             print(
                                 f">>> VIEWS: {total_views} (videos={scrape_result.get('count')}, "
-                                f"samples={scrape_result.get('samples')})",
+                                f"itemSel={scrape_result.get('usedItemSelector')}, "
+                                f"viewSel={scrape_result.get('usedViewSelector')}, "
+                                f"private={scrape_result.get('hasPrivateBadge')}, "
+                                f"noContent={scrape_result.get('hasNoContent')})",
                                 flush=True,
                             )
+                            print(f">>> VIEWS BODY SNIPPET: {scrape_result.get('bodyTextSnippet')!r}", flush=True)
                         except Exception as ve:
                             print(f">>> VIEWS ERROR: {ve}", flush=True)
                             logger.warning(f"Could not scrape views for {username}: {ve}")
